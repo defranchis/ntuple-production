@@ -717,6 +717,26 @@ rv::RVec<rv::RVec<float>> get_PID_pvalue(const rv::RVec<rv::RVec<std::array<doub
   return values;
 }
 
+// Re-order a track-indexed collection through the ReconstructedParticle->Track
+// relation: entry j of the result is the object that relation entry j points at.
+// ReconstructedParticle::tracks_begin is an offset into that relation, not a
+// track index, and in the ALEPH files the two are not parallel; after this
+// re-ordering coll.at(p.tracks_begin) is correct, and neutral particles
+// (tracks_begin == number of links) fall outside the collection.
+template <typename T>
+rv::RVec<T> reindexByRPLink(const rv::RVec<T> &coll,
+                            const rv::RVec<int> &rpTrackIndex) {
+  rv::RVec<T> out;
+  out.reserve(rpTrackIndex.size());
+  for (int idx : rpTrackIndex) {
+    if (idx >= 0 && idx < static_cast<int>(coll.size()))
+      out.push_back(coll.at(idx));
+    else
+      out.emplace_back();   // keeps the collection aligned with the relation
+  }
+  return out;
+}
+
 // Return a new collection (same type) with D0 signs flipped.
 ROOT::VecOps::RVec<edm4hep::TrackState>
 flipD0_copy(const ROOT::VecOps::RVec<edm4hep::TrackState>& tracks) {
