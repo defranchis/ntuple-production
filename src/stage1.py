@@ -461,11 +461,13 @@ class Analysis():
         # re-index through the RecoParticle->Track relation so that .at(tracks_begin) picks the particle's own track
         df = df.Define("TrackStateByRP", "AlephSelection::reindexByRPLink(TrackStateFlipped, _RecoParticles_tracks.index)")
 
-        df = df.Define("pfcand_dxy",        f'JetConstituentsUtils::XPtoPar_dxy(jetc, TrackStateByRP, Vertex_refit_tlv, Bz)') 
-        df = df.Define("pfcand_dz",         f'JetConstituentsUtils::XPtoPar_dz(jetc, TrackStateByRP, Vertex_refit_tlv, Bz)') 
-        df = df.Define("pfcand_phi0",       f'JetConstituentsUtils::XPtoPar_phi(jetc, TrackStateByRP, Vertex_refit_tlv, Bz)') 
-        df = df.Define("pfcand_C",          f'JetConstituentsUtils::XPtoPar_C(jetc, TrackStateByRP, Bz)') 
-        df = df.Define("pfcand_ct",         f'JetConstituentsUtils::XPtoPar_ct(jetc, TrackStateByRP, Bz)') 
+        # dxy/dz/phi0/C/ct w.r.t. the PV, computed once with every curvature term in cm (see analyzer.h)
+        df = df.Define("pfcand_trkparPV",   "AlephSelection::get_constituent_trackParamsAtPV(jetc, TrackStateByRP, Vertex_refit_tlv, Bz)")
+        df = df.Define("pfcand_dxy",        "pfcand_trkparPV.dxy")
+        df = df.Define("pfcand_dz",         "pfcand_trkparPV.dz")
+        df = df.Define("pfcand_phi0",       "pfcand_trkparPV.phi0")
+        df = df.Define("pfcand_C",          "pfcand_trkparPV.C")
+        df = df.Define("pfcand_ct",         "pfcand_trkparPV.ct")
         df = df.Define("pfcand_dptdpt",     f'JetConstituentsUtils::get_omega_cov(jetc, TrackStateByRP)') 
         df = df.Define("pfcand_dxydxy",     f'JetConstituentsUtils::get_d0_cov(jetc, TrackStateByRP)') 
         df = df.Define("pfcand_dzdz",       f'JetConstituentsUtils::get_z0_cov(jetc, TrackStateByRP)') 

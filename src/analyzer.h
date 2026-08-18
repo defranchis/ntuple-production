@@ -46,6 +46,7 @@
 #include "FCCAnalyses/MCParticle.h"
 #include "FCCAnalyses/VertexingUtils.h"
 #include "FCCAnalyses/VertexFinderLCFIPlus.h" 
+#include "aleph_units.h"
 
 #include "TVector3.h"
 
@@ -921,6 +922,77 @@ get_ptrel_log_cluster(const rv::RVec<fastjet::PseudoJet> &jets,
   }
   return out;
 }
+
+// --- constituent track parameters w.r.t. the primary vertex ------------------
+// Same algebra as ReconstructedParticle2Track::XPtoPar_dxy/dz/phi/C/ct,
+// evaluated once per constituent, with every curvature term in cm units: the
+// upstream helpers use c in GeV/(T m) for dxy/dz/phi (positions in metres) and
+// GeV/(T mm) for C (curvature in 1/mm), while the ALEPH track states, their
+// covariances and the vertices are in cm and 1/cm. Inputs: the track-state
+// collection ordered by the RecoParticle->Track relation (so that
+// tracks.at(p.tracks_begin) is the particle's own state and neutral particles,
+// whose tracks_begin equals the number of links, fall outside it and get -9
+// for all three), the primary vertex (cm) and Bz (T).
+struct TrackParamsAtPV {
+  rv::RVec<FCCAnalysesJetConstituentsData> dxy, dz, phi0, C, ct;
+};
+
+inline TrackParamsAtPV
+get_constituent_trackParamsAtPV(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
+                                const rv::RVec<edm4hep::TrackState> &tracks,
+                                const TLorentzVector &V, double Bz)
+{
+  TrackParamsAtPV out;
+  for (const auto &jet_csts : jcs) {
+    auto &odxy = out.dxy.emplace_back();
+    auto &odz  = out.dz.emplace_back();
+    auto &ophi = out.phi0.emplace_back();
+    auto &oC   = out.C.emplace_back();
+    auto &oct  = out.ct.emplace_back();
+    for (const auto &rp : jet_csts) {
+      if (!(rp.tracks_begin < tracks.size())) {
+        odxy.push_back(-9.); odz.push_back(-9.); ophi.push_back(-9.);
+        oC.push_back(-9.); oct.push_back(-9.);
+        continue;
+      }
+      const auto &ts = tracks.at(rp.tracks_begin);
+      const float D0_wrt0 = ts.D0, Z0_wrt0 = ts.Z0, phi0_wrt0 = ts.phi;
+      TVector3 X(-D0_wrt0 * TMath::Sin(phi0_wrt0), D0_wrt0 * TMath::Cos(phi0_wrt0), Z0_wrt0);
+      TVector3 x = X - V.Vect();
+      TVector3 p(rp.momentum.x, rp.momentum.y, rp.momentum.z);
+      const double a = -rp.charge * Bz * AlephUnits::kPtPerTeslaCm;
+      const double pt = p.Pt();
+      const double r2 = x(0) * x(0) + x(1) * x(1);
+      const double cross = x(0) * p(1) - x(1) * p(0);
+      const double disc = pt * pt - 2 * a * cross + a * a * r2;
+      // dxy (upstream guards the discriminant here only)
+      double D = -9.;
+      if (disc > 0) {
+        const double T = TMath::Sqrt(disc);
+        D = (pt < 10.0) ? (T - pt) / a : (-2 * cross + a * r2) / (T + pt);
+      }
+      odxy.push_back(D);
+      // dz and phi0 (upstream evaluates T unguarded; kept identical)
+      const double T = TMath::Sqrt(disc);
+      {
+        const double C = a / (2 * pt);
+        const double Dz = (pt < 10.0) ? (T - pt) / a : (-2 * cross + a * r2) / (T + pt);
+        double B = C * TMath::Sqrt(TMath::Max(r2 - Dz * Dz, 0.0) / (1 + 2 * C * Dz));
+        if (TMath::Abs(B) > 1.) B = TMath::Sign(1, B);
+        const double st = TMath::ASin(B) / C;
+        const double ct = p(2) / pt;
+        const double dot = x(0) * p(0) + x(1) * p(1);
+        odz.push_back((dot > 0.0) ? x(2) - ct * st : x(2) + ct * st);
+      }
+      ophi.push_back(TMath::ATan2((p(1) - a * x(0)) / T, (p(0) + a * x(1)) / T));
+      // curvature [1/cm] with the sign of the charge (as XPtoPar_C), and cot(theta)
+      oC.push_back(std::copysign(1.0, rp.charge) * Bz * AlephUnits::kPtPerTeslaCm / (2 * pt));
+      oct.push_back(p(2) / pt);
+    }
+  }
+  return out;
+}
+
 
 // --- per-constituent track quality -----------------------------------------
 // A ReconstructedParticle points at its track via tracks_begin; neutral
