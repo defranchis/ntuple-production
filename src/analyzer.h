@@ -729,10 +729,12 @@ rv::RVec<T> reindexByRPLink(const rv::RVec<T> &coll,
   rv::RVec<T> out;
   out.reserve(rpTrackIndex.size());
   for (int idx : rpTrackIndex) {
-    if (idx >= 0 && idx < static_cast<int>(coll.size()))
-      out.push_back(coll.at(idx));
-    else
-      out.emplace_back();   // keeps the collection aligned with the relation
+    // Out-of-range relation entry = corrupt input: fail loudly rather than
+    // emit a default element that downstream size guards would accept.
+    if (idx < 0 || idx >= static_cast<int>(coll.size()))
+      throw std::runtime_error(
+          "reindexByRPLink: RP->Track relation entry out of range");
+    out.push_back(coll.at(idx));
   }
   return out;
 }
