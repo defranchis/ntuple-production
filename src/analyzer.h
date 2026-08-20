@@ -22,6 +22,7 @@
     df = df.Define("isMu", "FCCAnalyses::AlephSelection::get_isMu(JetConstituents)")
            .Define("n_muons_per_jet", "Sum(isMu)");
 */
+#include "dedx_valid.h"
 #include "edm4hep/ReconstructedParticleCollection.h"
 #include "edm4hep/EventHeaderCollection.h"
 #include <set>
@@ -590,6 +591,7 @@ struct build_constituents_dEdx_PIDhypo{
              const rv::RVec<edm4hep::RecDqdxData> &dEdxCollection,
              const rv::RVec<int> &_dEdxIndicesCollection, 
              const std::vector<std::vector<int>> &jet_indices,
+             const rv::RVec<edm4hep::TrackState> &trackStates,
              bool is_wires) const
     { 
         rv::RVec<rv::RVec<edm4hep::RecDqdxData>> dedx_constituents;
@@ -637,13 +639,22 @@ struct build_constituents_dEdx_PIDhypo{
                   if (track_index_to_dEdx.count(track_index)) {
                     const auto &dEdx = track_index_to_dEdx[track_index];
 
-                    //get the PID hypotheses p-values (= array of five entries fo e, mu, pi, K, p)
-                    const auto PID_pvals_array = all_hypotheses_pvalues(tlv_recoPart.P(), dEdx.dQdx.value, dEdx.dQdx.error, is_wires);
+                    // A failed leg stores the track's omega as its value
+                    // (verbatim copy); dQdx.type is the pad-leg status only,
+                    // so it is not consulted.
+                    const float v = dEdx.dQdx.value;
+                    const float omega_sentinel =
+                        (track_index >= 0 &&
+                         track_index < static_cast<int>(trackStates.size()))
+                            ? trackStates[track_index].omega
+                            : v; // unknown track: treat as invalid
+                    const bool valid = FCCAnalyses::AlephDedx::dEdxValid(
+                        v, dEdx.dQdx.error, omega_sentinel);
 
-                    //check wether the measurement is valid, if not fill default value
-                    if (dEdx.dQdx.type == 0) {
-                      jet_dEdx.push_back(track_index_to_dEdx[track_index]);
-                      jet_pid_array.push_back(PID_pvals_array);
+                    if (valid) {
+                      jet_dEdx.push_back(dEdx);
+                      jet_pid_array.push_back(all_hypotheses_pvalues(
+                          tlv_recoPart.P(), v, dEdx.dQdx.error, is_wires));
                     }
                     else {
                       jet_dEdx.push_back(dEdx_dummy_obj);
