@@ -433,7 +433,6 @@ class Analysis():
         df = df.Define("pfcand_theta",    "JetConstituentsUtils::get_theta(jetc)") 
         df = df.Define("pfcand_phi",      "JetConstituentsUtils::get_phi(jetc)") 
         df = df.Define("pfcand_charge",   "JetConstituentsUtils::get_charge(jetc)") 
-        df = df.Define("pfcand_type",     "JetConstituentsUtils::get_type(jetc)") 
         df = df.Define("pfcand_erel",     "JetConstituentsUtils::get_erel_cluster(jets, jetc)")
         df = df.Define("pfcand_erel_log", "JetConstituentsUtils::get_erel_log_cluster(jets, jetc)")
         df = df.Define("pfcand_thetarel", "JetConstituentsUtils::get_thetarel_cluster(jets, jetc)")
@@ -743,7 +742,6 @@ class Analysis():
             "pfcand_theta", 
             "pfcand_phi", 
             "pfcand_charge", 
-            "pfcand_type",
             "pfcand_erel",
             "pfcand_erel_log",
             "pfcand_thetarel",

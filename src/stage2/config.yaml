@@ -47,7 +47,6 @@ pfcand_variables:
   - pfcand_theta
   - pfcand_phi
   - pfcand_charge
-  - pfcand_type
   
   # Relative kinematic variables
   - pfcand_erel

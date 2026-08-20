@@ -241,14 +241,6 @@ variables_pfcand = {
         "xmax": 1.5,
         "scale": "lin",
     },
-    "pfcand_type": {
-        "name": "pfcand_type",
-        "title": "PDG code",
-        "bin": 10000,
-        "xmin": -5000,
-        "xmax": 5000,
-        "scale": "lin",
-    },
     "pfcand_dxy": {
         "name": "pfcand_dxy",
         "title": "d_{xy} [mm]",

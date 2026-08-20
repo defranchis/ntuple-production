@@ -30,7 +30,6 @@ inputs:
         #- pfcand_py
         #- pfcand_pz
       - pfcand_charge
-      - pfcand_type
       - pfcand_theta
       - pfcand_phi
       
