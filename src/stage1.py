@@ -1,9 +1,28 @@
 
 import os
-from argparse import ArgumentParser
+from argparse import ArgumentParser, BooleanOptionalAction
 
 BZ = 1.5  # solenoid field [T] — single source for the stage1 Define strings
 PVNEW = "FCCAnalyses::AlephPVNew"  # namespace holding the PV selection constants
+
+# --dstar branch-name lists: single source for the Define chain and the
+# output branch list (per-candidate quantities, and the per-daughter block
+# instantiated for the K, the pi and the slow pi).
+D0_CAND_BRANCHES = ("m_kpi", "p", "px", "py", "pz", "costheta", "xE", "chi2",
+                    "vx", "vy", "vz", "dpv", "dpvSig", "cosPoint",
+                    "cosThetaStar", "loose", "tight", "stage", "nsec")
+DSTAR_CAND_BRANCHES = ("m_kpi", "dm", "p", "px", "py", "pz", "costheta", "xE",
+                       "chi2", "vx", "vy", "vz", "dpv", "dpvSig", "cosPoint",
+                       "cosThetaStar", "rs", "loose", "tight", "d0idx",
+                       "stage", "nsec")
+DSTAR_TRK_BRANCHES = ("origIdx", "q", "p", "costheta", "d0", "z0", "sigd0",
+                      "nvdet", "nitc", "chi2ndf", "isprim", "pool")
+TRUED0_BRANCHES = ("p", "pt", "costheta", "xE", "pK", "cosK", "pPi", "origin",
+                   "fromDstar", "mothPdg", "nmatched", "flight",
+                   "K_pool", "pi_pool")
+TRUEDSTAR_BRANCHES = ("p", "pt", "costheta", "xE", "px", "py", "pz", "pK",
+                      "cosK", "pPi", "pPis", "cosPis", "origin", "mothPdg",
+                      "nmatched", "d0flight", "K_pool", "pi_pool", "pis_pool")
 
 class Analysis():
 
@@ -87,6 +106,78 @@ class Analysis():
                             help='--phiKK: exclude tracks already claimed by a tight Ks/Lambda '
                                  'candidate from the pairing (needs the V0 module, i.e. not --oldV0). '
                                  'Off by default.')
+        parser.add_argument('--dstar', action='store_true',
+                            help='Run the standalone D*+ -> D0(K pi) pi_slow finder (dstar_* branches '
+                                 'plus the stand-alone D0 list d0_*); opt-in extension of the standalone '
+                                 'V0 machinery. Candidates are built from the FULL selected track list; '
+                                 'truth branches added on MC.')
+        parser.add_argument('--dstarMLo', default=1.70, type=float,
+                            help='--dstar: low edge of the STORED K pi mass window [GeV] (provisional).')
+        parser.add_argument('--dstarMHi', default=2.03, type=float,
+                            help='--dstar: high edge of the STORED K pi mass window [GeV] (provisional).')
+        parser.add_argument('--dstarChi2', default=25., type=float,
+                            help='--dstar: D0 vertex-fit chi2 cut (ndf=1); loose sanity value, <=0 disables (provisional).')
+        parser.add_argument('--dstarDpvMax', default=10., type=float,
+                            help='--dstar: |vtx-PV| storage fiducial [cm], default 10; <=0 = off. Sanity '
+                                 'bound only - promptness is NOT required (D* from b decays are displaced), '
+                                 'dpv/dpvSig are stored and never cut on (provisional).')
+        parser.add_argument('--dstarDmMax', default=0.20, type=float,
+                            help='--dstar: ceiling on the stored dm = m(K pi pi_s) - m(K pi) [GeV] (provisional).')
+        parser.add_argument('--dstarPMin', default=0.3, type=float,
+                            help='--dstar: momentum floor [GeV] for the K and pi candidates; <=0 = off. '
+                                 'Applied to the perigee momentum, while the stored trk p is the at-vertex one (provisional).')
+        parser.add_argument('--dstarPsMin', default=0.1, type=float,
+                            help='--dstar: momentum floor [GeV] for the slow pion; <=0 = off (provisional).')
+        parser.add_argument('--dstarSigd0', default=-1., type=float,
+                            help='--dstar: per-track sigma(d0) cap [cm]; <=0 = off (default).')
+        parser.add_argument('--dstarMinHits', default=0, type=int,
+                            help='--dstar: per-track minimum (nVDET + nITC) hits; 0 = off (default).')
+        parser.add_argument('--dstarTrkChi2', default=-1., type=float,
+                            help='--dstar: per-track fit chi2/ndf cap; <=0 = off (default).')
+        parser.add_argument('--d0LooseDm', default=0.060, type=float,
+                            help='--dstar: d0_loose label, |m(K pi) - m_D0| [GeV] (provisional).')
+        parser.add_argument('--d0TightDm', default=0.030, type=float,
+                            help='--dstar: d0_tight label, |m(K pi) - m_D0| [GeV] (provisional).')
+        parser.add_argument('--d0TightDpvSig', default=3.0, type=float,
+                            help='--dstar: d0_tight label, minimum 3D |vtx-PV| significance (provisional).')
+        parser.add_argument('--d0TightCosPoint', default=0.99, type=float,
+                            help='--dstar: d0_tight label, minimum cos(angle) between p(D0) and (vtx-PV) (provisional).')
+        parser.add_argument('--d0TightCosStar', default=0.8, type=float,
+                            help='--dstar: d0_tight label, maximum |cos(theta*)| of the kaon in the D0 frame (provisional).')
+        parser.add_argument('--dstarLooseDm', default=0.050, type=float,
+                            help='--dstar: dstar_loose label, |m(K pi) - m_D0| [GeV] (provisional).')
+        parser.add_argument('--dstarLooseDdm', default=0.0030, type=float,
+                            help='--dstar: dstar_loose label, |dm - 0.145426| [GeV] (provisional).')
+        parser.add_argument('--dstarTightDm', default=0.025, type=float,
+                            help='--dstar: dstar_tight label, |m(K pi) - m_D0| [GeV] (provisional).')
+        parser.add_argument('--dstarTightDdm', default=0.0015, type=float,
+                            help='--dstar: dstar_tight label, |dm - 0.145426| [GeV] (provisional).')
+        parser.add_argument('--dstarTightPK', default=1.0, type=float,
+                            help='--dstar: tight labels, minimum kaon momentum [GeV] (provisional).')
+        parser.add_argument('--dstarTightPPi', default=1.0, type=float,
+                            help='--dstar: tight labels, minimum pion momentum [GeV] (provisional).')
+        parser.add_argument('--dstarTightChi2', default=10., type=float,
+                            help='--dstar: tight labels, maximum D0 vertex chi2 (provisional).')
+        parser.add_argument('--dstarTightPs', default=0.3, type=float,
+                            help='--dstar: dstar_tight label, minimum slow-pion momentum [GeV]; '
+                                 '<=0 = off. Not applied to dstar_loose (provisional).')
+        parser.add_argument('--dstarTightCosPoint', default=0.95, type=float,
+                            help='--dstar: dstar_tight label, minimum cosPoint of the D0 vertex; '
+                                 '<=-1 = off. Not applied to dstar_loose (provisional).')
+        parser.add_argument('--dstarCascade', action='store_true',
+                            help='--dstar: STAGED EXCLUSIVE mode. Instead of one all-track pass, '
+                                 'candidates are built in six ordered stages by the primary/secondary '
+                                 'pool pattern of the (K, pi, pi_s) legs, most displaced first; after '
+                                 'each stage the legs of the claimed candidates leave the pool, so the '
+                                 'later stages see far fewer combinations. The D0-alone list gets the '
+                                 'same treatment in three stages. Off by default (single pass).')
+        parser.add_argument('--dstarClaim', default='tight', choices=['tight', 'loose', 'none'],
+                            help='--dstarCascade: which candidates claim their tracks between stages '
+                                 '(right-sign only for the D* cascade); none = stage without claiming.')
+        parser.add_argument('--dstarVetoV0', action=BooleanOptionalAction, default=True,
+                            help='--dstar: exclude tracks already claimed by a tight Ks/Lambda '
+                                 'candidate from the D* and D0 pools (needs the V0 module, i.e. not '
+                                 '--oldV0). On by default; --no-dstarVetoV0 turns it off.')
         parser.add_argument('--excludeRuns', nargs='+', default=[], type=int, metavar='RUN',
                             help='data only: veto these run numbers before any selection (eventsProcessed still counts the raw input).')
         # Parse additional arguments not known to the FCCAnalyses parsers
@@ -281,6 +372,16 @@ class Analysis():
             if "analyzer_v0new.h" not in self.include_paths:
                 self.include_paths.append("analyzer_v0new.h")
             self.include_paths.append("analyzer_phikk.h")
+        if self.ana_args.dstar:
+            if self.ana_args.dstarVetoV0 and not self.do_v0new:
+                print("----> ERROR: --dstarVetoV0 (on by default) needs the V0 module (the veto list "
+                      "comes from the tight Ks/Lambda claims); use --no-dstarVetoV0 to disable it.")
+                exit()
+            # analyzer_v0new.h carries invMass and trackQuantityByIndex, the
+            # shared helpers; appended only when it is not already in the list
+            if "analyzer_v0new.h" not in self.include_paths:
+                self.include_paths.append("analyzer_v0new.h")
+            self.include_paths.append("analyzer_dstar.h")
 
         # #submit to batch if requested:
         # self.run_batch = self.ana_args.batch # no longer supported
@@ -875,6 +976,93 @@ class Analysis():
                     df = df.Define(f"phikk_{_t}_mothpdg", f"phikktruth.{_t}_mothpdg")
                 df = df.Define("truephi_found", "FCCAnalyses::AlephPhiKK::truePhiFound(truePhis, phikktruth)")
 
+        ############################################# D*->D0(K pi) pi_slow module (--dstar) ###################################
+        if self.ana_args.dstar:
+            a = self.ana_args
+            # Candidates are built from the FULL baseline-selected track list:
+            # primary and secondary tracks alike, no masking by the PV split.
+            # selBaselineOrigIdx maps that collection to the original Tracks,
+            # which is how the per-track auxiliaries below are joined.
+            df = df.Define("dstar_nvdet_all", "FCCAnalyses::AlephDstar::subdetHits(selBaselineOrigIdx, Tracks.subdetectorHitNumbers_begin, Tracks.subdetectorHitNumbers_end, _Tracks_subdetectorHitNumbers, 0)")
+            df = df.Define("dstar_nitc_all",  "FCCAnalyses::AlephDstar::subdetHits(selBaselineOrigIdx, Tracks.subdetectorHitNumbers_begin, Tracks.subdetectorHitNumbers_end, _Tracks_subdetectorHitNumbers, 1)")
+            df = df.Define("dstar_chi2ndf_all", "FCCAnalyses::AlephDstar::trackChi2Ndf(selBaselineOrigIdx, Tracks.chi2, Tracks.ndf)")
+            df = df.Define("dstar_isprim_all",  "FCCAnalyses::AlephDstar::flagInSet(selBaselineOrigIdx, prim2origIdx)")
+            # staging class of every pool track (0 prim / 1 sec / 2 neither)
+            df = df.Define("dstar_pool_all",    "FCCAnalyses::AlephDstar::poolClass(selBaselineOrigIdx, prim2origIdx, sec2origIdx)")
+            if a.dstarVetoV0:
+                df = df.Define("dstar_veto_orig", "FCCAnalyses::AlephDstar::claimedOrigIdx(v0n_trk1_origIdx, v0n_trk2_origIdx, v0n_tight)")
+            else:
+                df = df.Define("dstar_veto_orig", "ROOT::VecOps::RVec<int>{}")
+            dstar_claim = {"tight": 1, "loose": 2, "none": 0}[a.dstarClaim]
+            dstar_args = ", ".join([
+                str(BZ), str(a.dstarMLo), str(a.dstarMHi), str(a.dstarChi2),
+                str(a.dstarDpvMax), str(a.dstarDmMax),
+                str(a.dstarPMin), str(a.dstarPsMin),
+                str(a.dstarSigd0), str(a.dstarMinHits), str(a.dstarTrkChi2),
+                str(a.d0LooseDm), str(a.d0TightDm), str(a.d0TightDpvSig),
+                str(a.d0TightCosPoint), str(a.d0TightCosStar),
+                str(a.dstarLooseDm), str(a.dstarLooseDdm),
+                str(a.dstarTightDm), str(a.dstarTightDdm),
+                str(a.dstarTightPK), str(a.dstarTightPPi), str(a.dstarTightChi2),
+                str(a.dstarTightPs), str(a.dstarTightCosPoint),
+                "FCCAnalyses::AlephDstar::PRE_MARGIN",
+                "true" if a.dstarCascade else "false", str(dstar_claim),
+                "dstar_veto_orig",
+            ])
+            df = df.Define("DstarCands_event",
+                           "FCCAnalyses::AlephDstar::findDstar(trackstates_selected_baseline_flipped, "
+                           "selBaselineOrigIdx, dstar_nvdet_all, dstar_nitc_all, dstar_chi2ndf_all, "
+                           f"dstar_isprim_all, dstar_pool_all, VertexObject_looseBS, {dstar_args})")
+            df = df.Define("n_d0_event",    "int(DstarCands_event.d0.m_kpi.size())")
+            df = df.Define("n_dstar_event", "int(DstarCands_event.ds.m_kpi.size())")
+            # two-track fits actually performed (cache misses): the combinatorial cost
+            df = df.Define("n_d0fits_event", "DstarCands_event.nfits")
+            for _b in D0_CAND_BRANCHES:
+                df = df.Define(f"d0_{_b}", f"DstarCands_event.d0.{_b}")
+            for _b in DSTAR_CAND_BRANCHES:
+                df = df.Define(f"dstar_{_b}", f"DstarCands_event.ds.{_b}")
+            for _pfx, _mem in (("d0_trkK", "d0.trkK"), ("d0_trkPi", "d0.trkPi"),
+                               ("dstar_trkK", "ds.trkK"), ("dstar_trkPi", "ds.trkPi"),
+                               ("dstar_trkPis", "ds.trkPis")):
+                for _b in DSTAR_TRK_BRANCHES:
+                    df = df.Define(f"{_pfx}_{_b}", f"DstarCands_event.{_mem}.{_b}")
+                # daughter dE/dx: STORED for the calibration, never selected on.
+                # A failed leg copies the track omega into dQdx.value, so the
+                # shared dEdxValid gate gives -1 in both value and error.
+                for _det, _coll in (("pads", "dEdxPads"), ("wires", "dEdxWires")):
+                    df = df.Define(f"{_pfx}_dEdx_{_det}_value",
+                                   f"FCCAnalyses::AlephV0New::trackQuantityByIndex({_pfx}_origIdx, {_coll}.dQdx.value, {_coll}.dQdx.value, {_coll}.dQdx.error, _{_coll}_track.index, _Tracks_trackStates)")
+                    df = df.Define(f"{_pfx}_dEdx_{_det}_error",
+                                   f"FCCAnalyses::AlephV0New::trackQuantityByIndex({_pfx}_origIdx, {_coll}.dQdx.error, {_coll}.dQdx.value, {_coll}.dQdx.error, _{_coll}_track.index, _Tracks_trackStates)")
+            if self.do_truth:
+                # the primary/secondary pool of each true daughter, measured
+                # through its linked track (prim2origIdx / sec2origIdx)
+                df = df.Define("trueD0s",    f"FCCAnalyses::AlephDstar::findTrueD0s({coll['GenParticles']}, mcToTracks, prim2origIdx, sec2origIdx)")
+                df = df.Define("trueDstars", f"FCCAnalyses::AlephDstar::findTrueDstars({coll['GenParticles']}, mcToTracks, prim2origIdx, sec2origIdx)")
+                for _b in TRUED0_BRANCHES:
+                    df = df.Define(f"trued0_{_b}", f"trueD0s.{_b}")
+                for _b in TRUEDSTAR_BRANCHES:
+                    df = df.Define(f"truedstar_{_b}", f"trueDstars.{_b}")
+                df = df.Define("n_trued0_event",    "int(trueD0s.idx.size())")
+                df = df.Define("n_truedstar_event", "int(trueDstars.idx.size())")
+                df = df.Define("d0truth",    f"FCCAnalyses::AlephDstar::classifyD0(DstarCands_event.d0, trackToMCs, {coll['GenParticles']}, trueD0s)")
+                df = df.Define("dstartruth", f"FCCAnalyses::AlephDstar::classifyDstar(DstarCands_event.ds, trackToMCs, {coll['GenParticles']}, trueDstars, trueD0s)")
+                df = df.Define("d0_class",      "d0truth.cls")
+                df = df.Define("d0_trueidx",    "d0truth.trueidx")
+                df = df.Define("dstar_class",   "dstartruth.cls")
+                df = df.Define("dstar_trueidx", "dstartruth.trueidx")
+                for _t in ("trkK", "trkPi"):
+                    df = df.Define(f"d0_{_t}_mcpdg",   f"d0truth.{_t}_mcpdg")
+                    df = df.Define(f"d0_{_t}_mothpdg", f"d0truth.{_t}_mothpdg")
+                for _t in ("trkK", "trkPi", "trkPis"):
+                    df = df.Define(f"dstar_{_t}_mcpdg",   f"dstartruth.{_t}_mcpdg")
+                    df = df.Define(f"dstar_{_t}_mothpdg", f"dstartruth.{_t}_mothpdg")
+                # per-true-particle efficiency flags (class-1 candidate carrying the label)
+                df = df.Define("trued0_found_loose",    "FCCAnalyses::AlephDstar::trueD0Found(trueD0s, d0truth, d0_loose)")
+                df = df.Define("trued0_found_tight",    "FCCAnalyses::AlephDstar::trueD0Found(trueD0s, d0truth, d0_tight)")
+                df = df.Define("truedstar_found_loose", "FCCAnalyses::AlephDstar::trueDstarFound(trueDstars, dstartruth, dstar_loose)")
+                df = df.Define("truedstar_found_tight", "FCCAnalyses::AlephDstar::trueDstarFound(trueDstars, dstartruth, dstar_tight)")
+
         ############################################# Particle Flow Level Variables #######################################################
         df = df.Define("pfcand_isMu",     "AlephSelection::get_isType(jetConstitutentsTypes,2)")
         df = df.Define("pfcand_isEl",     "AlephSelection::get_isType(jetConstitutentsTypes,1)")
@@ -1151,6 +1339,33 @@ class Analysis():
                         "dauPlus_p", "dauMinus_p")
                 ] + ["phikk_class", "phikk_trueidx"] + [
                     f"phikk_{t}_{b}" for t in ("trk1", "trk2")
+                    for b in ("mcpdg", "mothpdg")
+                ]
+        if self.ana_args.dstar:
+            truth_branches += ["n_d0_event", "n_dstar_event", "n_d0fits_event"] + [
+                f"d0_{b}" for b in D0_CAND_BRANCHES
+            ] + [
+                f"dstar_{b}" for b in DSTAR_CAND_BRANCHES
+            ] + [
+                f"{pfx}_{b}"
+                for pfx in ("d0_trkK", "d0_trkPi", "dstar_trkK", "dstar_trkPi", "dstar_trkPis")
+                for b in DSTAR_TRK_BRANCHES + (
+                    "dEdx_pads_value", "dEdx_pads_error",
+                    "dEdx_wires_value", "dEdx_wires_error")
+            ]
+            if self.do_truth:
+                truth_branches += ["n_trued0_event", "n_truedstar_event",
+                                   "trued0_found_loose", "trued0_found_tight",
+                                   "truedstar_found_loose", "truedstar_found_tight",
+                                   "d0_class", "d0_trueidx",
+                                   "dstar_class", "dstar_trueidx"] + [
+                    f"trued0_{b}" for b in TRUED0_BRANCHES
+                ] + [
+                    f"truedstar_{b}" for b in TRUEDSTAR_BRANCHES
+                ] + [
+                    f"d0_{t}_{b}" for t in ("trkK", "trkPi") for b in ("mcpdg", "mothpdg")
+                ] + [
+                    f"dstar_{t}_{b}" for t in ("trkK", "trkPi", "trkPis")
                     for b in ("mcpdg", "mothpdg")
                 ]
 
