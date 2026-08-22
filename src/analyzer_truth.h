@@ -243,7 +243,7 @@ struct V0Pairs {
 
 inline V0Pairs rerunV0Pairing(const RVec<edm4hep::TrackState>& np_tracks,
                               const VertexingUtils::FCCAnalysesVertex& PV,
-                              double solenoidBz = 1.5,
+                              double solenoidBz,
                               double chi2_cut = 10.) {
   V0Pairs out;
   const int nTr = np_tracks.size();
@@ -294,13 +294,18 @@ inline V0Pairs rerunV0Pairing(const RVec<edm4hep::TrackState>& np_tracks,
 inline RVec<int> daughtersInSecondaries(const TrueV0s& tv,
                                         const RVec<RVec<int>>& mcToTracks,
                                         const RVec<int>& sec2orig) {
-  std::set<int> sec(sec2orig.begin(), sec2orig.end());
+  // membership flag indexed by original-track index (bounds-checked on read)
+  int nmax = -1;
+  for (int o : sec2orig) nmax = std::max(nmax, o);
+  std::vector<char> inSec(nmax + 1, 0);
+  for (int o : sec2orig)
+    if (o >= 0) inSec[o] = 1;
   RVec<int> out;
   for (size_t k = 0; k < tv.pdg.size(); ++k) {
     int n = 0;
     for (int dau : {tv.dau1[k], tv.dau2[k]}) {
       for (int t : mcToTracks[dau])
-        if (sec.count(t)) { ++n; break; }
+        if (t >= 0 && t < (int)inSec.size() && inSec[t]) { ++n; break; }
     }
     out.push_back(n);
   }

@@ -34,8 +34,6 @@ namespace AlephPVNew {
 
 using ROOT::VecOps::RVec;
 
-// pT [GeV] = kPtPerTeslaCm * Bz [T] / |omega [1/cm]| (single source: aleph_units.h)
-constexpr double kPtPerTeslaCm = AlephUnits::kPtPerTeslaCm;
 using Vec3 = Eigen::Vector3d;
 using Mat3 = Eigen::Matrix3d;
 using Vec5 = Eigen::Matrix<double, 5, 1>;
@@ -124,7 +122,6 @@ inline const char* status_name(int s) {
 
 enum PVSeed : int {
   kSeedNone = -1,
-  kSeedUser = 0,
   kSeedLinear = 1,
   kSeedBeamspot = 2,
   kSeedPerigeeMedian = 3
@@ -132,7 +129,6 @@ enum PVSeed : int {
 
 inline const char* seed_name(int s) {
   switch (s) {
-    case kSeedUser: return "user";
     case kSeedLinear: return "linear";
     case kSeedBeamspot: return "beamspot";
     case kSeedPerigeeMedian: return "perigee_median";
@@ -164,19 +160,6 @@ struct PVFitResult {
   int n_rejected_steps = 0;
   int seed_used = kSeedNone;
   std::string seeds_tried;    // e.g. "linear:ok" / "linear:lm_stall,beamspot:ok"
-
-  double chi2_per_ndf() const {
-    return ndf > 0 ? chi2 / ndf : std::numeric_limits<double>::quiet_NaN();
-  }
-  TVector3 position_v3() const {
-    return TVector3(position[0], position[1], position[2]);
-  }
-  double cov_xx() const { return cov[0]; }
-  double cov_yx() const { return cov[1]; }
-  double cov_yy() const { return cov[2]; }
-  double cov_zx() const { return cov[3]; }
-  double cov_zy() const { return cov[4]; }
-  double cov_zz() const { return cov[5]; }
 };
 
 struct PVSelResult {
@@ -189,16 +172,6 @@ struct PVSelResult {
                          // vertex carries no event information even when both
                          // converged flags are true; check before using it.
   int n_passes = 0;
-};
-
-struct SmoothedTracks {
-  // One-shot post-convergence smoothing output.
-  bool valid = false;                 // false when the fit did not converge
-  RVec<double> par;                   // 5 per track: (D, phi0, C, z0, ct),
-                                      // updated to pass through the vertex
-  RVec<TVector3> momentum;            // momentum vector at the vertex, GeV
-  RVec<double> phase;                 // arc length of the vertex on the
-                                      // UPDATED helix, cm
 };
 
 // ---------------------------------------------------------------------------
@@ -221,16 +194,6 @@ struct TrackSet {
   std::vector<Vec5> par;
   std::vector<Mat5> cov;
   size_t size() const { return par.size(); }
-  TrackSet subset(const std::vector<int>& idx) const {
-    TrackSet s;
-    s.par.reserve(idx.size());
-    s.cov.reserve(idx.size());
-    for (int i : idx) {
-      s.par.push_back(par[i]);
-      s.cov.push_back(cov[i]);
-    }
-    return s;
-  }
 };
 
 inline void add_track(TrackSet& ts, double d0, double phi, double omega,
@@ -472,6 +435,28 @@ inline Vec3 seed_linear(const TrackSet& ts, const BeamSpot* bs,
   return bs ? bs->center() : Vec3::Zero();
 }
 
+// component-wise median of the perigee points, the last rung of the ladder
+inline Vec3 seed_perigee_median(const TrackSet& ts) {
+  const size_t N = ts.size();
+  std::vector<double> cx, cy, cz;
+  cx.reserve(N);
+  cy.reserve(N);
+  cz.reserve(N);
+  for (size_t i = 0; i < N; ++i) {
+    const Vec3 p = helix_point(ts.par[i], 0.0);
+    cx.push_back(p(0));
+    cy.push_back(p(1));
+    cz.push_back(p(2));
+  }
+  auto median = [](std::vector<double>& v) {
+    const size_t n = v.size();
+    std::sort(v.begin(), v.end());
+    if (n == 0) return std::numeric_limits<double>::quiet_NaN();
+    return (n % 2 == 1) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+  };
+  return Vec3(median(cx), median(cy), median(cz));
+}
+
 struct RunResult {
   Vec3 x;
   Mat3 cov;
@@ -590,7 +575,7 @@ inline RunResult run_from_seed(const TrackSet& ts, const BeamSpot* bs,
 }
 
 inline PVFitResult fit_core(const TrackSet& ts, const BeamSpot* bs,
-                            const Vec3* x_start, const FitConfig& cfg) {
+                            const FitConfig& cfg) {
   const size_t N = ts.size();
   PVFitResult out;
   out.n_tracks = static_cast<int>(N);
@@ -604,53 +589,34 @@ inline PVFitResult fit_core(const TrackSet& ts, const BeamSpot* bs,
     return out;
   }
 
-  // deterministic seed ladder
-  std::vector<std::pair<int, Vec3>> seeds;
-  if (x_start) seeds.emplace_back(kSeedUser, *x_start);
-  seeds.emplace_back(kSeedLinear, seed_linear(ts, bs, cfg));
-  seeds.emplace_back(kSeedBeamspot, bs ? bs->center() : Vec3::Zero());
-  {
-    std::vector<double> cx, cy, cz;
-    cx.reserve(N);
-    cy.reserve(N);
-    cz.reserve(N);
-    for (size_t i = 0; i < N; ++i) {
-      const Vec3 p = helix_point(ts.par[i], 0.0);
-      cx.push_back(p(0));
-      cy.push_back(p(1));
-      cz.push_back(p(2));
-    }
-    auto median = [](std::vector<double>& v) {
-      const size_t n = v.size();
-      std::sort(v.begin(), v.end());
-      if (n == 0) return std::numeric_limits<double>::quiet_NaN();
-      return (n % 2 == 1) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
-    };
-    seeds.emplace_back(kSeedPerigeeMedian, Vec3(median(cx), median(cy),
-                                                median(cz)));
-  }
-
+  // deterministic seed ladder; a rung is only built when it is reached
+  const int ladder[3] = {kSeedLinear, kSeedBeamspot, kSeedPerigeeMedian};
   std::string tried;
   bool have_best = false;
   RunResult best;
   int best_seed = kSeedNone;
-  for (const auto& s : seeds) {
+  for (int rung : ladder) {
+    Vec3 x0;
+    if (rung == kSeedLinear) x0 = seed_linear(ts, bs, cfg);
+    else if (rung == kSeedBeamspot) x0 = bs ? bs->center() : Vec3::Zero();
+    else x0 = seed_perigee_median(ts);
+
     if (!tried.empty()) tried += ",";
-    if (!s.second.allFinite()) {
-      tried += std::string(seed_name(s.first)) + ":badseed";
+    if (!x0.allFinite()) {
+      tried += std::string(seed_name(rung)) + ":badseed";
       continue;
     }
-    RunResult res = run_from_seed(ts, bs, s.second, cfg);
-    tried += std::string(seed_name(s.first)) + ":" + status_name(res.status);
+    RunResult res = run_from_seed(ts, bs, x0, cfg);
+    tried += std::string(seed_name(rung)) + ":" + status_name(res.status);
     if (!have_best) {
       best = res;
-      best_seed = s.first;
+      best_seed = rung;
       have_best = true;
     }
     if (res.converged) {
       if (!best.converged || res.chi2 < best.chi2 - 1e-9) {
         best = res;
-        best_seed = s.first;
+        best_seed = rung;
       }
       break;  // first converged seed wins (deterministic ladder order)
     }
@@ -678,7 +644,7 @@ inline PVFitResult fit_core(const TrackSet& ts, const BeamSpot* bs,
 
 inline PVSelResult select_core(const TrackSet& ts, const BeamSpot* bs,
                                double chi2_max, const FitConfig& cfg,
-                               int min_tracks, bool force_first_removal) {
+                               int min_tracks) {
   const int N = static_cast<int>(ts.size());
   PVSelResult out;
   out.kept.reserve(N);
@@ -686,7 +652,7 @@ inline PVSelResult select_core(const TrackSet& ts, const BeamSpot* bs,
   for (int i = 0; i < N; ++i) keep[i] = i;
 
   if (N < min_tracks) {
-    out.fit = fit_core(ts, bs, nullptr, cfg);
+    out.fit = fit_core(ts, bs, cfg);
     out.kept.assign(keep.begin(), keep.end());
     out.split_converged = out.fit.converged;
     out.trivial = true;
@@ -694,10 +660,11 @@ inline PVSelResult select_core(const TrackSet& ts, const BeamSpot* bs,
     return out;
   }
 
-  bool first_pass = true;
+  // pruned in place: one pass removes exactly one track, so the working set is
+  // always the subset of `keep`
+  TrackSet sub = ts;
   while (true) {
-    const TrackSet sub = ts.subset(keep);
-    PVFitResult res = fit_core(sub, bs, nullptr, cfg);
+    PVFitResult res = fit_core(sub, bs, cfg);
     ++out.n_passes;
     if (!res.converged) {
       // Refuse to prune on a non-converged fit: return the split so far,
@@ -717,11 +684,7 @@ inline PVSelResult select_core(const TrackSet& ts, const BeamSpot* bs,
         imax = static_cast<int>(i);
       }
     }
-    // force_first_removal reproduces the reference loop's unconditional first
-    // removal; the default tests the threshold first.
-    const bool forced = first_pass && force_first_removal;
-    first_pass = false;
-    if (imax < 0 || (!forced && !(cmax >= chi2_max)) ||
+    if (imax < 0 || !(cmax >= chi2_max) ||
         static_cast<int>(keep.size()) - 1 < min_tracks) {
       out.kept.assign(keep.begin(), keep.end());
       out.fit = res;
@@ -729,6 +692,8 @@ inline PVSelResult select_core(const TrackSet& ts, const BeamSpot* bs,
       return out;
     }
     keep.erase(keep.begin() + imax);
+    sub.par.erase(sub.par.begin() + imax);
+    sub.cov.erase(sub.cov.begin() + imax);
   }
 }
 
@@ -738,123 +703,14 @@ inline PVSelResult select_core(const TrackSet& ts, const BeamSpot* bs,
 // public interface — edm4hep track states (ALEPH-flipped, cm-native)
 // ---------------------------------------------------------------------------
 
-inline PVFitResult fit_vertex(const RVec<edm4hep::TrackState>& tracks,
-                              const BeamSpot& bs,
-                              const FitConfig& cfg = FitConfig()) {
-  const detail::TrackSet ts = detail::convert(tracks);
-  return detail::fit_core(ts, &bs, nullptr, cfg);
-}
-
-inline PVFitResult fit_vertex_nobs(const RVec<edm4hep::TrackState>& tracks,
-                                   const FitConfig& cfg = FitConfig()) {
-  const detail::TrackSet ts = detail::convert(tracks);
-  return detail::fit_core(ts, nullptr, nullptr, cfg);
-}
-
-inline PVFitResult fit_vertex_seeded(const RVec<edm4hep::TrackState>& tracks,
-                                     const BeamSpot& bs, double sx, double sy,
-                                     double sz,
-                                     const FitConfig& cfg = FitConfig()) {
-  const detail::TrackSet ts = detail::convert(tracks);
-  const Vec3 seed(sx, sy, sz);
-  return detail::fit_core(ts, &bs, &seed, cfg);
-}
-
 // Iterative chi2max pruning with the SAME fitter and the SAME beam-spot
 // constraint as the final fit (identity by construction).
 inline PVSelResult select_primary_tracks(
     const RVec<edm4hep::TrackState>& tracks, const BeamSpot& bs,
     double chi2_max, const FitConfig& cfg = FitConfig(),
-    int min_tracks = 2, bool force_first_removal = false) {
+    int min_tracks = 2) {
   const detail::TrackSet ts = detail::convert(tracks);
-  return detail::select_core(ts, &bs, chi2_max, cfg, min_tracks,
-                             force_first_removal);
-}
-
-// Per-track chi2 against a FIXED point (no fit): the beamspot-as-fixed-PV
-// fallback classification for events whose pruning did not converge.
-inline RVec<double> track_chi2_vs_point(const RVec<edm4hep::TrackState>& tracks,
-                                        double px, double py, double pz,
-                                        const FitConfig& cfg = FitConfig()) {
-  const detail::TrackSet ts = detail::convert(tracks);
-  const Vec3 x(px, py, pz);
-  std::vector<double> L(ts.size(), 0.0);
-  detail::TrackTerms tt;
-  detail::track_terms(ts, x, L, cfg, tt);
-  return RVec<double>(tt.chi2.begin(), tt.chi2.end());
-}
-
-// One-shot post-convergence smoothing: updated track parameters (D, phi0, C,
-// z0, ct) and momenta [GeV] at the fitted vertex. Refuses on a non-converged
-// fit (returns valid = false).
-inline SmoothedTracks smooth_at_vertex(const RVec<edm4hep::TrackState>& tracks,
-                                       const PVFitResult& res,
-                                       double solenoidBz = 1.5,
-                                       const FitConfig& cfg = FitConfig()) {
-  SmoothedTracks out;
-  if (!res.converged ||
-      static_cast<int>(tracks.size()) != res.n_tracks)
-    return out;  // valid = false
-  const detail::TrackSet ts = detail::convert(tracks);
-  const Vec3 x(res.position[0], res.position[1], res.position[2]);
-  const size_t N = ts.size();
-  out.par.reserve(5 * N);
-  out.momentum.reserve(N);
-  out.phase.reserve(N);
-  for (size_t i = 0; i < N; ++i) {
-    // Constrained least squares: min (p - par)^T C^-1 (p - par) subject to the
-    // helix at p passing through the fitted vertex x, by iterated linearised
-    // projection. The vertex itself is never touched.
-    Vec5 pnew = ts.par[i];
-    double L2 = res.track_phase[i];
-    for (int it = 0; it < 3; ++it) {
-      // re-solve the phase of the vertex on the current helix
-      for (int k = 0; k < 3; ++k) {
-        const Vec3 X2 = detail::helix_point(pnew, L2);
-        const Vec3 a2 = detail::helix_dXdL(pnew, L2);
-        const double dn = a2.dot(a2);
-        if (!(dn > 0)) break;
-        L2 += (x - X2).dot(a2) / dn;
-      }
-      const Vec3 X = detail::helix_point(pnew, L2);
-      const Mat35 A = detail::helix_dXdpar(pnew, L2);
-      const Vec3 a = detail::helix_dXdL(pnew, L2);
-      const Mat3 Winv = A * ts.cov[i] * A.transpose();
-      double cond;
-      bool ok;
-      const Mat3 W = detail::reg_inv(Winv, cfg.rcond, cond, ok);
-      const Vec3 aw = W * a;
-      const double denom = a.dot(aw);
-      const Mat3 D = (denom > 0 && std::isfinite(denom))
-                         ? Mat3(W - (aw * aw.transpose()) / denom)
-                         : W;
-      // residual of the constraint linearised about pnew, referred back to
-      // the ORIGINAL parameters: p_next = par + C A^T D (x - X + A*(pnew-par))
-      const Vec3 rtil = (x - X) + A * (pnew - ts.par[i]);
-      pnew = ts.par[i] + ts.cov[i] * A.transpose() * (D * rtil);
-    }
-    {
-      // final phase refresh on the final helix
-      for (int k = 0; k < 3; ++k) {
-        const Vec3 X2 = detail::helix_point(pnew, L2);
-        const Vec3 a2 = detail::helix_dXdL(pnew, L2);
-        const double dn = a2.dot(a2);
-        if (!(dn > 0)) break;
-        L2 += (x - X2).dot(a2) / dn;
-      }
-    }
-    const double ang = pnew(1) + 2.0 * pnew(2) * L2;
-    const double absC = std::abs(pnew(2));
-    // omega = -2C
-    const double pt = absC > 0 ? kPtPerTeslaCm * solenoidBz / (2.0 * absC)
-                               : std::numeric_limits<double>::quiet_NaN();
-    for (int k = 0; k < 5; ++k) out.par.push_back(pnew(k));
-    out.momentum.emplace_back(pt * std::cos(ang), pt * std::sin(ang),
-                              pt * pnew(4));
-    out.phase.push_back(L2);
-  }
-  out.valid = true;
-  return out;
+  return detail::select_core(ts, &bs, chi2_max, cfg, min_tracks);
 }
 
 // ---------------------------------------------------------------------------
@@ -915,47 +771,6 @@ inline RVec<edm4hep::TrackState> primaryTracksFromSel(
   for (size_t i = 0; i < tracks.size(); ++i)
     if (tt.chi2[i] < chi2_max) out.push_back(tracks[i]);
   return out;
-}
-
-// ---------------------------------------------------------------------------
-// raw-double interface: bypasses the float edm4hep track-state members so the
-// offline gates run at full double fidelity.
-// ---------------------------------------------------------------------------
-
-inline PVFitResult fit_vertex_raw(const RVec<double>& d0,
-                                  const RVec<double>& phi,
-                                  const RVec<double>& omega,
-                                  const RVec<double>& z0,
-                                  const RVec<double>& tanl,
-                                  const RVec<double>& cov21_flat,
-                                  const BeamSpot& bs, bool use_bs,
-                                  double seed_x, double seed_y, double seed_z,
-                                  bool use_seed,
-                                  const FitConfig& cfg = FitConfig()) {
-  detail::TrackSet ts;
-  const size_t N = d0.size();
-  for (size_t i = 0; i < N; ++i)
-    detail::add_track(ts, d0[i], phi[i], omega[i], z0[i], tanl[i],
-                      cov21_flat.data() + 21 * i);
-  const Vec3 seed(seed_x, seed_y, seed_z);
-  return detail::fit_core(ts, use_bs ? &bs : nullptr,
-                          use_seed ? &seed : nullptr, cfg);
-}
-
-inline PVSelResult select_primary_tracks_raw(
-    const RVec<double>& d0, const RVec<double>& phi, const RVec<double>& omega,
-    const RVec<double>& z0, const RVec<double>& tanl,
-    const RVec<double>& cov21_flat, const BeamSpot& bs,
-    double chi2_max,
-    const FitConfig& cfg = FitConfig(), int min_tracks = 2,
-    bool force_first_removal = false) {
-  detail::TrackSet ts;
-  const size_t N = d0.size();
-  for (size_t i = 0; i < N; ++i)
-    detail::add_track(ts, d0[i], phi[i], omega[i], z0[i], tanl[i],
-                      cov21_flat.data() + 21 * i);
-  return detail::select_core(ts, &bs, chi2_max, cfg, min_tracks,
-                             force_first_removal);
 }
 
 }  // namespace AlephPVNew

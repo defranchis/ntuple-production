@@ -958,7 +958,10 @@ get_constituent_trackParamsAtPV(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
     auto &oC   = out.C.emplace_back();
     auto &oct  = out.ct.emplace_back();
     for (const auto &rp : jet_csts) {
-      if (!(rp.tracks_begin < tracks.size())) {
+      // tracks_begin != tracks_end is the "has a track" test: a neutral's
+      // tracks_begin is still in range, so the bare range check reads ANOTHER
+      // particle's track and propagates NaN into dxy/dz and the btag branches.
+      if (!(rp.tracks_begin != rp.tracks_end && rp.tracks_begin < tracks.size())) {
         odxy.push_back(-9.); odz.push_back(-9.); ophi.push_back(-9.);
         oC.push_back(-9.); oct.push_back(-9.);
         continue;
@@ -973,15 +976,13 @@ get_constituent_trackParamsAtPV(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
       const double r2 = x(0) * x(0) + x(1) * x(1);
       const double cross = x(0) * p(1) - x(1) * p(0);
       const double disc = pt * pt - 2 * a * cross + a * a * r2;
-      // dxy (upstream guards the discriminant here only)
-      double D = -9.;
-      if (disc > 0) {
-        const double T = TMath::Sqrt(disc);
-        D = (pt < 10.0) ? (T - pt) / a : (-2 * cross + a * r2) / (T + pt);
-      }
-      odxy.push_back(D);
-      // dz and phi0 (upstream evaluates T unguarded; kept identical)
+      // T is NaN for disc <= 0; upstream guards the discriminant for dxy only,
+      // so dz/phi0 keep using it unguarded and dxy stays at its -9 sentinel.
       const double T = TMath::Sqrt(disc);
+      double D = -9.;
+      if (disc > 0)
+        D = (pt < 10.0) ? (T - pt) / a : (-2 * cross + a * r2) / (T + pt);
+      odxy.push_back(D);
       {
         const double C = a / (2 * pt);
         const double Dz = (pt < 10.0) ? (T - pt) / a : (-2 * cross + a * r2) / (T + pt);
@@ -1064,6 +1065,27 @@ rv::RVec<FCCAnalysesJetConstituentsData>
 get_constituent_trackChi2Norm(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
                               const rv::RVec<edm4hep::TrackData> &tracks)
 { return get_constituent_trackQuality(jcs, tracks, 2); }
+
+// ORIGINAL-Tracks index of each constituent's own track, -1 when it has none:
+// the join key between the pfcand_* block and the finders' *_origIdx branches.
+// tracks_begin indexes the RP->Track relation, whose entries are track indices.
+rv::RVec<rv::RVec<int>>
+get_constituent_trackIdx(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
+                         const rv::RVec<int> &rpTrackIndex)
+{
+  rv::RVec<rv::RVec<int>> out;
+  for (const auto &jet_csts : jcs) {
+    auto &o = out.emplace_back();
+    for (const auto &p : jet_csts) {
+      int val = -1;
+      size_t slot = p.tracks_begin;
+      if (p.tracks_begin != p.tracks_end && slot < rpTrackIndex.size())
+        val = rpTrackIndex.at(slot);
+      o.emplace_back(val);
+    }
+  }
+  return out;
+}
 
 // --- per-constituent subdetector hit counts --------------------------------
 // subdetectorNumber assumes inside-out ordering: 0 = VDET, 1 = ITC, 2 = TPC.

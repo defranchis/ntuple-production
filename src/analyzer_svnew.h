@@ -14,12 +14,16 @@
 #include <numeric>
 #include <vector>
 
+#include "aleph_units.h"
+#include "analyzer_trkaux.h"
+
 namespace FCCAnalyses {
 namespace AlephSVNew {
 
 using ROOT::VecOps::RVec;
+using AlephTrkAux::fitTracksCm;
 
-constexpr double SVN_MPI = 0.13957039;
+constexpr double SVN_MPI = AlephMasses::kPiCh;
 
 // Adopted secondary-vertex selection: the single source for these values.
 constexpr double SVN_CHI2 = 10.;        // normalised vertex chi2 (seed and growth)
@@ -29,8 +33,6 @@ constexpr double SVN_SIGL_MAX = 0.10;   // longitudinal vertex sigma guard [cm]
 constexpr int SVN_MAX_TRK = 8;          // maximum tracks per candidate (growth cap)
 constexpr double SVN_TRK_CHI2 = 5.;     // per-track chi2 contribution cap (<=0 off)
 constexpr double SVN_COS_POINT = 0.7;   // minimum cosPointing
-constexpr int SVN_CLAIM_MODE = 0;       // seed ordering: best-chi2 seed first
-constexpr double SVN_GROW_SHIFT = 0.;   // max fitted-vertex shift per growth step [cm]; 0 = off
 
 // V0-track masking modes for findSVs
 constexpr int SVN_MASK_NONE = 0;        // mask nothing (unmasked control twin)
@@ -46,10 +48,95 @@ inline double sigmaAlong(const Cov& c, const TVector3& u) {
   return (var > 0.) ? std::sqrt(var) : 0.;
 }
 
+struct SVCand {
+  VertexingUtils::FCCAnalysesVertex vtx;
+  std::vector<int> trk;
+  double chi2;   // normalised
+  double mass;
+};
+
+// One multi-track fit + the group-level quality cuts; `group` is a scratch
+// buffer reused across calls.
+inline bool svFitGroup(const RVec<edm4hep::TrackState>& np_tracks,
+                       const std::vector<int>& idx, double solenoidBz,
+                       RVec<edm4hep::TrackState>& group,
+                       VertexingUtils::FCCAnalysesVertex& out) {
+  group.clear();
+  for (int k : idx) group.push_back(np_tracks[k]);
+  auto v = fitTracksCm(group, np_tracks, solenoidBz);
+  if ((int)v.updated_track_momentum_at_vertex.size() != (int)idx.size()) return false;
+  double chi2 = v.vertex.chi2;  // normalised
+  if (!(chi2 == chi2) || chi2 >= SVN_CHI2) return false;
+  // per-track compatibility: every track must individually fit the vertex
+  if (v.reco_chi2.size() == idx.size())
+    for (float rc : v.reco_chi2)
+      if (rc > SVN_TRK_CHI2) return false;
+  out = v;
+  return true;
+}
+
+inline bool svPassWindows(const VertexingUtils::FCCAnalysesVertex& v,
+                          const TVector3& pv, double& mass_out) {
+  TVector3 x(v.vertex.position[0], v.vertex.position[1], v.vertex.position[2]);
+  TVector3 d = x - pv;
+  double dis = d.Mag();
+  if (dis < SVN_DIS_LO || dis > SVN_DIS_HI) return false;
+  TVector3 psum(0., 0., 0.);
+  double esum = 0.;
+  for (const auto& tp : v.updated_track_momentum_at_vertex) {
+    psum += tp;
+    esum += std::sqrt(tp.Mag2() + SVN_MPI * SVN_MPI);
+  }
+  const double pmag = psum.Mag();
+  if (pmag <= 0.) return false;
+  // pointing: the SV momentum must not be anti-aligned with the flight line
+  if (d.Dot(psum) / (dis * pmag) < SVN_COS_POINT) return false;
+  // collinear-degeneracy guard: fit constrained along the track bundle?
+  if (sigmaAlong(v.vertex.covMatrix, psum.Unit()) > SVN_SIGL_MAX) return false;
+  double m2 = esum * esum - psum.Mag2();
+  mass_out = (m2 > 0.) ? std::sqrt(m2) : 0.;
+  return true;
+}
+
+// Two-track seed pass over the WHOLE collection, computed once per event and
+// read by every masking mode: masking only ever removes tracks, and both the
+// seed list and the pair-compatibility table are then filtered, never refitted.
+struct SVSeeds {
+  std::vector<SVCand> seeds;  // window-passing pairs, (i, j) ascending
+  std::vector<char> pairok;   // nTr x nTr: the pair fits a common vertex
+  int nTr = 0;
+};
+
+inline SVSeeds svSeedPass(const RVec<edm4hep::TrackState>& np_tracks,
+                          const VertexingUtils::FCCAnalysesVertex& PV,
+                          double solenoidBz) {
+  SVSeeds out;
+  const int nTr = np_tracks.size();
+  out.nTr = nTr;
+  if (nTr < 2) return out;
+  TVector3 pv(PV.vertex.position[0], PV.vertex.position[1], PV.vertex.position[2]);
+
+  RVec<edm4hep::TrackState> group;
+  group.reserve(nTr);
+  out.pairok.assign((size_t)nTr * nTr, 0);
+  for (int i = 0; i < nTr - 1; ++i) {
+    for (int j = i + 1; j < nTr; ++j) {
+      VertexingUtils::FCCAnalysesVertex v;
+      if (!svFitGroup(np_tracks, {i, j}, solenoidBz, group, v)) continue;
+      out.pairok[(size_t)i * nTr + j] = out.pairok[(size_t)j * nTr + i] = 1;
+      double m;
+      if (!svPassWindows(v, pv, m)) continue;
+      out.seeds.push_back({v, {i, j}, v.vertex.chi2, m});
+    }
+  }
+  return out;
+}
+
 // findSVs: v0s/v0_tight mask V0-claimed tracks; mask_mode 0 = none, 1 = tight
-// only, 2 = all V0-claimed. Returns FCCAnalysesV0 (pdgAbs = 0, invM = N-pion
-// mass); reco_ind indexes the SECONDARY collection, NOT the original Tracks
-// index space of v0n_trk1/trk2 (map through sec2origIdx to compare).
+// only. Returns FCCAnalysesV0 (pdgAbs = 0, invM = N-pion mass); reco_ind
+// indexes the SECONDARY collection, NOT the original Tracks index space of
+// v0n_trk1/trk2 (map through sec2origIdx to compare). Every selection value is
+// a constant defined above.
 inline VertexingUtils::FCCAnalysesV0 findSVs(
     const RVec<edm4hep::TrackState>& np_tracks,
     const VertexingUtils::FCCAnalysesVertex& PV,
@@ -57,18 +144,11 @@ inline VertexingUtils::FCCAnalysesV0 findSVs(
     const RVec<int>& v0_tight,
     int mask_mode,
     double solenoidBz,
-    double chi2_cut = SVN_CHI2,
-    double dis_lo = SVN_DIS_LO, double dis_hi = SVN_DIS_HI,
-    double sigl_max = SVN_SIGL_MAX,
-    int max_tracks = SVN_MAX_TRK,
-    double trk_chi2 = SVN_TRK_CHI2,
-    double cos_point_min = SVN_COS_POINT,
-    int claim_mode = SVN_CLAIM_MODE,
-    double grow_shift = SVN_GROW_SHIFT) {
+    const SVSeeds& pass) {
 
   VertexingUtils::FCCAnalysesV0 result;
   const int nTr = np_tracks.size();
-  if (nTr < 2) return result;
+  if (nTr < 2 || pass.nTr != nTr) return result;
 
   TVector3 pv(PV.vertex.position[0], PV.vertex.position[1], PV.vertex.position[2]);
 
@@ -81,81 +161,22 @@ inline VertexingUtils::FCCAnalysesV0 findSVs(
     }
   }
 
-  struct Cand {
-    VertexingUtils::FCCAnalysesVertex vtx;
-    std::vector<int> trk;
-    double chi2;   // normalised
-    double mass;
-  };
-
-  auto fitGroup = [&](const std::vector<int>& idx,
-                      VertexingUtils::FCCAnalysesVertex& out) -> bool {
-    RVec<edm4hep::TrackState> group;
-    for (int k : idx) group.push_back(np_tracks[k]);
-    auto v = VertexFitterSimple::VertexFitter_Tk(
-        0, group, np_tracks, false, 0., 0., 0., 0., 0., 0., solenoidBz, false);
-    if ((int)v.updated_track_momentum_at_vertex.size() != (int)idx.size()) return false;
-    // cm-as-mm homothety: momentum magnitudes 10x too small — rescale once.
-    for (auto& tp : v.updated_track_momentum_at_vertex) tp *= 10.;
-    double chi2 = v.vertex.chi2;  // normalised
-    if (!(chi2 == chi2) || chi2 >= chi2_cut) return false;
-    // per-track compatibility: every track must individually fit the vertex
-    if (trk_chi2 > 0 && v.reco_chi2.size() == idx.size())
-      for (float rc : v.reco_chi2)
-        if (rc > trk_chi2) return false;
-    out = v;
-    return true;
-  };
-
-  auto passWindows = [&](const VertexingUtils::FCCAnalysesVertex& v,
-                         double& mass_out) -> bool {
-    TVector3 x(v.vertex.position[0], v.vertex.position[1], v.vertex.position[2]);
-    TVector3 d = x - pv;
-    double dis = d.Mag();
-    if (dis < dis_lo || dis > dis_hi) return false;
-    TVector3 psum(0., 0., 0.);
-    double esum = 0.;
-    for (const auto& tp : v.updated_track_momentum_at_vertex) {
-      psum += tp;
-      esum += std::sqrt(tp.Mag2() + SVN_MPI * SVN_MPI);
-    }
-    if (psum.Mag() <= 0.) return false;
-    // pointing: the SV momentum must not be anti-aligned with the flight line
-    if (d.Dot(psum) / (dis * psum.Mag()) < cos_point_min) return false;
-    // collinear-degeneracy guard: fit constrained along the track bundle?
-    if (sigmaAlong(v.vertex.covMatrix, psum.Unit()) > sigl_max) return false;
-    double m2 = esum * esum - psum.Mag2();
-    mass_out = (m2 > 0.) ? std::sqrt(m2) : 0.;
-    return true;
-  };
-
-  // ---- seed pass: all unmasked pairs, any charge combination -------------
-  // pairok caches which pairs fit together; growth only tries pair-linked tracks.
-  std::vector<Cand> seeds;
-  std::vector<char> pairok((size_t)nTr * nTr, 0);
-  for (int i = 0; i < nTr - 1; ++i) {
-    if (masked[i]) continue;
-    for (int j = i + 1; j < nTr; ++j) {
-      if (masked[j]) continue;
-      VertexingUtils::FCCAnalysesVertex v;
-      if (!fitGroup({i, j}, v)) continue;
-      pairok[(size_t)i * nTr + j] = pairok[(size_t)j * nTr + i] = 1;
-      double m;
-      if (!passWindows(v, m)) continue;
-      seeds.push_back({v, {i, j}, v.vertex.chi2, m});
-    }
-  }
+  // reused across every fit: cleared, not reallocated, on each call
+  RVec<edm4hep::TrackState> group;
+  group.reserve(nTr);
+  std::vector<int> trial;
+  trial.reserve(nTr);
+  const std::vector<char>& pairok = pass.pairok;
 
   // ---- growth of ONE candidate ------------------------------------------
   // repeatedly attach the available (unblocked, pair-linked) track giving the
   // best refit chi2, while windows/guards still pass.
-  auto growCand = [&](Cand c, const std::vector<bool>& blocked) {
+  auto growCand = [&](const SVCand& seed, const std::vector<bool>& blocked) {
+    SVCand c = seed;
     bool grew = true;
-    while (grew && (int)c.trk.size() < max_tracks) {
+    while (grew && (int)c.trk.size() < SVN_MAX_TRK) {
       grew = false;
-      Cand best = c;
-      TVector3 xc(c.vtx.vertex.position[0], c.vtx.vertex.position[1],
-                  c.vtx.vertex.position[2]);
+      SVCand best = c;
       for (int k = 0; k < nTr; ++k) {
         if (blocked[k]) continue;
         if (std::find(c.trk.begin(), c.trk.end(), k) != c.trk.end()) continue;
@@ -163,18 +184,12 @@ inline VertexingUtils::FCCAnalysesV0 findSVs(
         for (int m0 : c.trk)
           if (pairok[(size_t)m0 * nTr + k]) { linked = true; break; }
         if (!linked) continue;
-        std::vector<int> trial = c.trk;
+        trial = c.trk;
         trial.push_back(k);
         VertexingUtils::FCCAnalysesVertex v;
-        if (!fitGroup(trial, v)) continue;
+        if (!svFitGroup(np_tracks, trial, solenoidBz, group, v)) continue;
         double m;
-        if (!passWindows(v, m)) continue;
-        // position-stability guard: reject growth steps moving the fitted
-        // vertex by more than grow_shift (cm). 0 = guard off.
-        if (grow_shift > 0.) {
-          TVector3 xn(v.vertex.position[0], v.vertex.position[1], v.vertex.position[2]);
-          if ((xn - xc).Mag() > grow_shift) continue;
-        }
+        if (!svPassWindows(v, pv, m)) continue;
         if (!grew || v.vertex.chi2 < best.chi2) {
           best = {v, trial, v.vertex.chi2, m};
           grew = true;
@@ -185,64 +200,27 @@ inline VertexingUtils::FCCAnalysesV0 findSVs(
     return c;
   };
 
-  // ---- seed ordering -----------------------------------------------------
-  // claim_mode 0 = best normalised chi2 first; 1 = densest seed first (clique
-  // size from pairok, chi2 tie-break); 2 = grow every seed with all tracks
-  // available, then claim by (ntracks desc, chi2 asc).
-  std::vector<size_t> order(seeds.size());
-  std::iota(order.begin(), order.end(), 0);
-  if (claim_mode == 1) {
-    std::vector<int> clq(seeds.size(), 0);
-    for (size_t s = 0; s < seeds.size(); ++s) {
-      int i = seeds[s].trk[0], j = seeds[s].trk[1], n = 0;
-      for (int k = 0; k < nTr; ++k)
-        if (!masked[k] && k != i && k != j &&
-            pairok[(size_t)i * nTr + k] && pairok[(size_t)j * nTr + k]) ++n;
-      clq[s] = n;
-    }
-    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-      if (clq[a] != clq[b]) return clq[a] > clq[b];
-      return seeds[a].chi2 < seeds[b].chi2;
-    });
-  } else {
-    std::stable_sort(order.begin(), order.end(),
-                     [&](size_t a, size_t b) { return seeds[a].chi2 < seeds[b].chi2; });
-  }
+  // ---- seed ordering: best normalised chi2 claims first -------------------
+  // seeds on a masked track are dropped first, so the surviving order is the
+  // one a seed pass restricted to the unmasked tracks would have produced.
+  std::vector<size_t> order;
+  order.reserve(pass.seeds.size());
+  for (size_t s = 0; s < pass.seeds.size(); ++s)
+    if (!masked[pass.seeds[s].trk[0]] && !masked[pass.seeds[s].trk[1]])
+      order.push_back(s);
+  std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+    return pass.seeds[a].chi2 < pass.seeds[b].chi2;
+  });
 
-  auto emit = [&](const Cand& c) {
+  std::vector<bool> used(nTr, false);
+  std::vector<bool> blocked = masked;
+  for (size_t s : order) {
+    if (used[pass.seeds[s].trk[0]] || used[pass.seeds[s].trk[1]]) continue;
+    const SVCand c = growCand(pass.seeds[s], blocked);
+    for (int t : c.trk) { used[t] = true; blocked[t] = true; }
     result.vtx.push_back(c.vtx);
     result.pdgAbs.push_back(0);
     result.invM.push_back(c.mass);
-  };
-
-  std::vector<bool> used(nTr, false);
-  if (claim_mode <= 1) {
-    std::vector<bool> blocked = masked;
-    for (size_t s : order) {
-      Cand c = seeds[s];
-      if (used[c.trk[0]] || used[c.trk[1]]) continue;
-      c = growCand(c, blocked);
-      for (int t : c.trk) { used[t] = true; blocked[t] = true; }
-      emit(c);
-    }
-  } else {
-    std::vector<Cand> grown;
-    grown.reserve(seeds.size());
-    for (size_t s : order) grown.push_back(growCand(seeds[s], masked));
-    std::vector<size_t> ord2(grown.size());
-    std::iota(ord2.begin(), ord2.end(), 0);
-    std::stable_sort(ord2.begin(), ord2.end(), [&](size_t a, size_t b) {
-      if (grown[a].trk.size() != grown[b].trk.size())
-        return grown[a].trk.size() > grown[b].trk.size();
-      return grown[a].chi2 < grown[b].chi2;
-    });
-    for (size_t s : ord2) {
-      bool clash = false;
-      for (int t : grown[s].trk) if (used[t]) { clash = true; break; }
-      if (clash) continue;
-      for (int t : grown[s].trk) used[t] = true;
-      emit(grown[s]);
-    }
   }
   return result;
 }

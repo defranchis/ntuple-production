@@ -1,20 +1,156 @@
 
 import os
-from argparse import ArgumentParser, BooleanOptionalAction
+from argparse import ArgumentParser
 
 BZ = 1.5  # solenoid field [T] — single source for the stage1 Define strings
 PVNEW = "FCCAnalyses::AlephPVNew"  # namespace holding the PV selection constants
 
-# --dstar branch-name lists: single source for the Define chain and the
+# Per-daughter dE/dx: the collections to read and the branch suffixes they
+# produce, in the order they are written.
+DEDX_COLLS = (("pads", "dEdxPads"), ("wires", "dEdxWires"))
+DEDX_BRANCHES = tuple(f"dEdx_{_d}_{_q}" for _d, _ in DEDX_COLLS
+                      for _q in ("value", "error"))
+# particle-flow label joined onto every candidate leg through its origIdx
+LEG_PID_BRANCHES = ("isChargedHad",)
+# particle-flow type code of a charged hadron (single source: analyzer_trkaux.h)
+PF_CHARGED_HAD = "FCCAnalyses::AlephTrkAux::kPFChargedHad"
+
+# V0-module branch lists. Each entry is (branch suffix, Define expression), so
+# a name appears once and drives both the Define chain and the output list.
+V0N_CAND_DEFINES = (
+    ("pdg",         "V0sNew_event.pdgAbs"),
+    ("invM",        "V0sNew_event.invM"),
+    ("alpha",       "FCCAnalyses::AlephV0New::candAlpha(V0sNew_event, SecondaryTracks_looseBS)"),
+    ("qt",          "FCCAnalyses::AlephV0New::candQt(V0sNew_event)"),
+    ("chi2",        "FCCAnalyses::AlephTruth::candChi2(V0sNew_event)"),
+    ("dxyz",        "FCCAnalyses::AlephTruth::candDxyz(V0sNew_event, VertexObject_looseBS)"),
+    ("p",           "FCCAnalyses::AlephTruth::candP(V0sNew_event)"),
+    # momentum VECTOR of the same summed vertex momentum as v0n_p
+    # (direction-dependent offline studies: pointing at any reference)
+    ("px",          "FCCAnalyses::AlephTruth::candPcomp(V0sNew_event, 0)"),
+    ("py",          "FCCAnalyses::AlephTruth::candPcomp(V0sNew_event, 1)"),
+    ("pz",          "FCCAnalyses::AlephTruth::candPcomp(V0sNew_event, 2)"),
+    ("cosPointing", "FCCAnalyses::AlephTruth::candCosPointing(V0sNew_event, VertexObject_looseBS)"),
+    ("pointSig",    "FCCAnalyses::AlephV0New::candPointSig(V0sNew_event, VertexObject_looseBS)"),
+    # two-tier module: 1 = adopted tight package, 0 = loose training tier.
+    # Selecting v0n_tight==1 reproduces the historical tight-only output exactly.
+    ("tight",       "FCCAnalyses::AlephV0New::candTight(V0sNew_event, VertexObject_looseBS, SecondaryTracks_looseBS)"),
+    # ML-input pulls: cut variables in resolution units (signed; -999 undefined).
+    ("bandSig",     "FCCAnalyses::AlephV0New::candBandSig(V0sNew_event, SecondaryTracks_looseBS)"),
+    ("massSig",     "FCCAnalyses::AlephV0New::candMassSig(V0sNew_event)"),
+    # fitted-vertex position (position-resolution studies)
+    ("vx",          "FCCAnalyses::AlephTruth::candVtxPos(V0sNew_event, 0)"),
+    ("vy",          "FCCAnalyses::AlephTruth::candVtxPos(V0sNew_event, 1)"),
+    ("vz",          "FCCAnalyses::AlephTruth::candVtxPos(V0sNew_event, 2)"),
+    # vertex-fit covariance (packed lower triangle, cm^2 - same component
+    # order as Vertex_refit_cov_*)
+    ("cov_xx",      "FCCAnalyses::AlephV0New::candCovComp(V0sNew_event, 0)"),
+    ("cov_yx",      "FCCAnalyses::AlephV0New::candCovComp(V0sNew_event, 1)"),
+    ("cov_yy",      "FCCAnalyses::AlephV0New::candCovComp(V0sNew_event, 2)"),
+    ("cov_zx",      "FCCAnalyses::AlephV0New::candCovComp(V0sNew_event, 3)"),
+    ("cov_zy",      "FCCAnalyses::AlephV0New::candCovComp(V0sNew_event, 4)"),
+    ("cov_zz",      "FCCAnalyses::AlephV0New::candCovComp(V0sNew_event, 5)"),
+)
+V0N_TRKS = ("trk1", "trk2")
+V0N_TRUTH_DEFINES = (
+    ("v0n_class",                "v0ntruth.cls"),
+    ("v0n_trueidx",              "v0ntruth.true_idx"),
+    ("v0n_pairmult",             "v0ntruth.pair_mult"),
+    ("v0n_trackshared",          "v0ntruth.track_shared"),
+    ("v0n_trk1",                 "v0ntruth.trk1"),
+    ("v0n_trk2",                 "v0ntruth.trk2"),
+    ("truev0_foundnew_any",      "FCCAnalyses::AlephTruth::trueV0FoundAny(trueV0s, v0ntruth)"),
+    ("truev0_foundnew_correct",  "FCCAnalyses::AlephTruth::trueV0FoundCorrect(trueV0s, v0ntruth, V0sNew_event)"),
+)
+# per-jet mirror of the old-finder v0_* block, on the new candidates
+V0NJET_DEFINES = (
+    ("pdg",           "v0njet_per_jet.pdgAbs"),
+    ("invM",          "v0njet_per_jet.invM"),
+    ("chi2",          "FCCAnalyses::VertexingUtils::get_chi2_SV(v0njet_jets)"),
+    ("chi2_norm",     "FCCAnalyses::VertexingUtils::get_norm_chi2_SV(v0njet_jets)"),
+    ("ndof",          "FCCAnalyses::VertexingUtils::get_nDOF_SV(v0njet_jets)"),
+    ("ntracks",       "FCCAnalyses::VertexingUtils::get_VertexNtrk(v0njet_jets)"),
+    ("p",             "FCCAnalyses::VertexingUtils::get_pMag_SV(v0njet_jets)"),
+    ("prel",          "FCCAnalyses::AlephSelection::get_prel_SV_jets(v0njet_jets, jets)"),
+    ("thetarel",      "FCCAnalyses::VertexingUtils::get_relTheta_SV(v0njet_jets, jets)"),
+    ("phirel",        "FCCAnalyses::VertexingUtils::get_relPhi_SV(v0njet_jets, jets)"),
+    ("dxy",           "FCCAnalyses::VertexingUtils::get_dxy_SV(v0njet_jets, VertexObject_looseBS)"),
+    ("dxyz",          "FCCAnalyses::VertexingUtils::get_d3d_SV(v0njet_jets, VertexObject_looseBS)"),
+    ("cosPointing",   "FCCAnalyses::AlephSelection::get_pointingangle_SV(v0njet_jets, VertexObject_looseBS)"),
+    ("correctedMass", "FCCAnalyses::AlephSelection::get_correctedInvMass_SV(v0njet_jets, VertexObject_looseBS)"),
+    ("dx",            "FCCAnalyses::AlephSelection::get_dx_SV_jets(v0njet_jets, PrimaryVertexP3)"),
+    ("dy",            "FCCAnalyses::AlephSelection::get_dy_SV_jets(v0njet_jets, PrimaryVertexP3)"),
+    ("dz",            "FCCAnalyses::AlephSelection::get_dz_SV_jets(v0njet_jets, PrimaryVertexP3)"),
+)
+# generated V0s and the truth classification of the legacy-finder candidates
+TRUEV0_DEFINES = (
+    ("pdg",          "trueV0s.pdg"),
+    ("p",            "trueV0s.p"),
+    ("costheta",     "trueV0s.costheta"),
+    ("px",           "trueV0s.px"),
+    ("py",           "trueV0s.py"),
+    ("pz",           "trueV0s.pz"),
+    ("fd",           "trueV0s.fd"),
+    ("dpv",          "trueV0s.dpv"),
+    ("nmatched",     "trueV0s.nmatched"),
+    # daughters surviving into the secondary-track set (0-2): separates
+    # PV-claim losses from finder losses
+    ("nsec",         "FCCAnalyses::AlephTruth::daughtersInSecondaries(trueV0s, mcToTracks, sec2origIdx)"),
+    ("found_any",     "FCCAnalyses::AlephTruth::trueV0FoundAny(trueV0s, v0truth)"),
+    ("found_correct", "FCCAnalyses::AlephTruth::trueV0FoundCorrect(trueV0s, v0truth, V0s_event)"),
+    # true decay-point components [cm] (position-resolution studies)
+    ("x",            "trueV0s.vx"),
+    ("y",            "trueV0s.vy"),
+    ("z",            "trueV0s.vz"),
+)
+V0C_DEFINES = (
+    ("class",        "v0truth.cls"),
+    ("trueidx",      "v0truth.true_idx"),
+    ("pairmult",     "v0truth.pair_mult"),
+    ("trackshared",  "v0truth.track_shared"),
+    ("alpha",        "v0truth.alpha"),
+    ("qt",           "v0truth.qt"),
+    ("trk1",         "v0truth.trk1"),
+    ("trk2",         "v0truth.trk2"),
+    # event-order candidate kinematics (independent of jet assignment)
+    ("pdg",          "V0s_event.pdgAbs"),
+    ("invM",         "V0s_event.invM"),
+    ("dxyz",         "FCCAnalyses::AlephTruth::candDxyz(V0s_event, VertexObject_looseBS)"),
+    ("p",            "FCCAnalyses::AlephTruth::candP(V0s_event)"),
+    ("cosPointing",  "FCCAnalyses::AlephTruth::candCosPointing(V0s_event, VertexObject_looseBS)"),
+    # fitted-vertex position (position-resolution studies)
+    ("vx",           "FCCAnalyses::AlephTruth::candVtxPos(V0s_event, 0)"),
+    ("vy",           "FCCAnalyses::AlephTruth::candVtxPos(V0s_event, 1)"),
+    ("vz",           "FCCAnalyses::AlephTruth::candVtxPos(V0s_event, 2)"),
+)
+
+# phi->KK branch-name lists: single source for the Define chain and the output
+# branch list (per-candidate quantities, and the per-daughter block).
+PHIKK_CAND_BRANCHES = ("invM", "p", "px", "py", "pz", "alpha", "qt", "bandEll",
+                       "chi2", "vx", "vy", "vz", "dpv", "dpvSig", "same_sign",
+                       "wp", "tight")
+PHIKK_TRKS = ("trk1", "trk2")
+PHIKK_TRK_BRANCHES = ("origIdx", "q", "p", "costheta", "d0", "z0", "sigd0",
+                      "nvdet", "nitc", "chi2ndf", "isprim")
+TRUEPHI_BRANCHES = ("mothPdg", "origin", "p", "pt", "costheta",
+                    "px", "py", "pz", "vx", "vy", "vz", "nmatched",
+                    "dauPlus_p", "dauMinus_p")
+# per-daughter truth labels, shared by the phi and D* candidate blocks
+TRK_TRUTH_BRANCHES = ("mcpdg", "mothpdg")
+
+# D* branch-name lists: single source for the Define chain and the
 # output branch list (per-candidate quantities, and the per-daughter block
 # instantiated for the K, the pi and the slow pi).
+# kinematics the D0 and the D* entry share; they live in the CandKin member
+CAND_KIN_BRANCHES = ("m_kpi", "p", "px", "py", "pz", "costheta", "xE", "chi2",
+                     "vx", "vy", "vz", "dpv", "dpvSig", "cosPoint",
+                     "cosThetaStar")
 D0_CAND_BRANCHES = ("m_kpi", "p", "px", "py", "pz", "costheta", "xE", "chi2",
                     "vx", "vy", "vz", "dpv", "dpvSig", "cosPoint",
-                    "cosThetaStar", "loose", "tight", "stage", "nsec")
+                    "cosThetaStar", "loose", "tight", "nsec")
 DSTAR_CAND_BRANCHES = ("m_kpi", "dm", "p", "px", "py", "pz", "costheta", "xE",
                        "chi2", "vx", "vy", "vz", "dpv", "dpvSig", "cosPoint",
-                       "cosThetaStar", "rs", "loose", "tight", "d0idx",
-                       "stage", "nsec")
+                       "cosThetaStar", "rs", "loose", "tight", "d0idx", "nsec")
 DSTAR_TRK_BRANCHES = ("origIdx", "q", "p", "costheta", "d0", "z0", "sigd0",
                       "nvdet", "nitc", "chi2ndf", "isprim", "pool")
 TRUED0_BRANCHES = ("p", "pt", "costheta", "xE", "pK", "cosK", "pPi", "origin",
@@ -23,6 +159,18 @@ TRUED0_BRANCHES = ("p", "pt", "costheta", "xE", "pK", "cosK", "pPi", "origin",
 TRUEDSTAR_BRANCHES = ("p", "pt", "costheta", "xE", "px", "py", "pz", "pK",
                       "cosK", "pPi", "pPis", "cosPis", "origin", "mothPdg",
                       "nmatched", "d0flight", "K_pool", "pi_pool", "pis_pool")
+# (branch prefix, member of DstarCands) of every stored daughter leg
+DSTAR_TRK_LEGS = (("d0_trkK", "d0.trkK"), ("d0_trkPi", "d0.trkPi"),
+                  ("dstar_trkK", "ds.trkK"), ("dstar_trkPi", "ds.trkPi"),
+                  ("dstar_trkPis", "ds.trkPis"))
+D0_TRKS = ("trkK", "trkPi")
+DSTAR_TRKS = ("trkK", "trkPi", "trkPis")
+
+
+def _cand_member(block, branch):
+    """Member path of a D0/D* candidate branch inside DstarCands."""
+    return f"{block}.kin.{branch}" if branch in CAND_KIN_BRANCHES \
+        else f"{block}.{branch}"
 
 class Analysis():
 
@@ -61,123 +209,10 @@ class Analysis():
                             help='Legacy SV only: drop the standalone SV module (no svn_*/svm_* branches).')
         parser.add_argument('--oldPV', action='store_true',
                             help='Legacy PV chain: get_PrimaryTracks + VertexFitter_Tk and the origin-referenced track pre-selection, instead of the standalone fitter and its beamspot-referenced window (no pv_* flag branches).')
-        parser.add_argument('--v0nWideLamLoose', action='store_true',
-                            help='TAIL-MEASUREMENT VARIANT: loose Lambda AP band ramp edges doubled (0.40/0.80; stored acceptance 0.8x that) to measure the band tail. Not for standard productions.')
-        parser.add_argument('--v0nLamPointKsTiers', action='store_true',
-                            help='SIZING VARIANT: tight-tier Lambda pointing aligned to the Ks p-tiers. Not for standard productions; candTight still encodes the adopted package.')
-        parser.add_argument('--phiKK', action='store_true',
-                            help='Run the standalone phi(1020)->K+K- finder (phikk_* branches); '
-                                 'opt-in extension of the standalone V0 machinery. Pairs are formed '
-                                 'from the FULL selected track list; truth branches added on MC.')
-        parser.add_argument('--phiKKmLo', default=None, type=float,
-                            help='--phiKK: low edge of the STORED K+K- mass window [GeV]; default AlephPhiKK::M_LO.')
-        parser.add_argument('--phiKKmHi', default=None, type=float,
-                            help='--phiKK: high edge of the STORED K+K- mass window [GeV]; default AlephPhiKK::M_HI.')
-        parser.add_argument('--phiKKchi2', default=None, type=float,
-                            help='--phiKK: vertex-fit chi2 cut (ndf=1); loose sanity value, <=0 disables; '
-                                 'default AlephPhiKK::CHI2_CUT.')
-        parser.add_argument('--phiKKapBand', default=-1., type=float,
-                            help='--phiKK: |bandEll-1| Armenteros band cut; <=0 = off (default). '
-                                 'For equal-mass daughters the band is a reparametrisation of the mass window.')
-        parser.add_argument('--phiKKdpv', default=-1., type=float,
-                            help='--phiKK: PV-compatibility cut |vtx-PV| [cm]; <=0 = off (default). '
-                                 'Promptness is NOT required: phi from b/c decays are displaced.')
-        parser.add_argument('--phiKKdpvFid', default=None, type=float,
-                            help='--phiKK: |vtx-PV| storage fiducial [cm]; <=0 = off; default AlephPhiKK::DPV_FID. '
-                                 'Sanity bound only: near-collinear pairs give a vertex '
-                                 'unconstrained along the flight direction, so a real phi '
-                                 'can reach ~17 cm.')
-        parser.add_argument('--phiKKdpvSig', default=-1., type=float,
-                            help='--phiKK: PV-compatibility significance cut; <=0 = off (default).')
-        parser.add_argument('--phiKKsigd0', default=-1., type=float,
-                            help='--phiKK: per-track sigma(d0) cap [cm]; <=0 = off (default).')
-        parser.add_argument('--phiKKminHits', default=0, type=int,
-                            help='--phiKK: per-track minimum (nVDET + nITC) hits; 0 = off (default).')
-        parser.add_argument('--phiKKtrkChi2', default=-1., type=float,
-                            help='--phiKK: per-track fit chi2/ndf cap; <=0 = off (default).')
-        parser.add_argument('--phiKKpMin', default=None, type=float,
-                            help='--phiKK: per-track momentum floor [GeV]; <=0 = off; default AlephPhiKK::P_MIN_DEF. '
-                                 'Applied to the perigee momentum, while the stored trk p is the '
-                                 'at-vertex one (~1%% tail difference).')
-        parser.add_argument('--phiKKnoSameSign', action='store_true',
-                            help='--phiKK: do NOT reconstruct same-charge pairs (they are the '
-                                 'data-driven combinatorial control and are stored by default).')
-        parser.add_argument('--phiKKvetoV0', action='store_true',
-                            help='--phiKK: exclude tracks already claimed by a tight Ks/Lambda '
-                                 'candidate from the pairing (needs the V0 module, i.e. not --oldV0). '
-                                 'Off by default.')
-        parser.add_argument('--dstar', action='store_true',
-                            help='Run the standalone D*+ -> D0(K pi) pi_slow finder (dstar_* branches '
-                                 'plus the stand-alone D0 list d0_*); opt-in extension of the standalone '
-                                 'V0 machinery. Candidates are built from the FULL selected track list; '
-                                 'truth branches added on MC.')
-        parser.add_argument('--dstarMLo', default=1.70, type=float,
-                            help='--dstar: low edge of the STORED K pi mass window [GeV] (provisional).')
-        parser.add_argument('--dstarMHi', default=2.03, type=float,
-                            help='--dstar: high edge of the STORED K pi mass window [GeV] (provisional).')
-        parser.add_argument('--dstarChi2', default=25., type=float,
-                            help='--dstar: D0 vertex-fit chi2 cut (ndf=1); loose sanity value, <=0 disables (provisional).')
-        parser.add_argument('--dstarDpvMax', default=10., type=float,
-                            help='--dstar: |vtx-PV| storage fiducial [cm], default 10; <=0 = off. Sanity '
-                                 'bound only - promptness is NOT required (D* from b decays are displaced), '
-                                 'dpv/dpvSig are stored and never cut on (provisional).')
-        parser.add_argument('--dstarDmMax', default=0.20, type=float,
-                            help='--dstar: ceiling on the stored dm = m(K pi pi_s) - m(K pi) [GeV] (provisional).')
-        parser.add_argument('--dstarPMin', default=0.3, type=float,
-                            help='--dstar: momentum floor [GeV] for the K and pi candidates; <=0 = off. '
-                                 'Applied to the perigee momentum, while the stored trk p is the at-vertex one (provisional).')
-        parser.add_argument('--dstarPsMin', default=0.1, type=float,
-                            help='--dstar: momentum floor [GeV] for the slow pion; <=0 = off (provisional).')
-        parser.add_argument('--dstarSigd0', default=-1., type=float,
-                            help='--dstar: per-track sigma(d0) cap [cm]; <=0 = off (default).')
-        parser.add_argument('--dstarMinHits', default=0, type=int,
-                            help='--dstar: per-track minimum (nVDET + nITC) hits; 0 = off (default).')
-        parser.add_argument('--dstarTrkChi2', default=-1., type=float,
-                            help='--dstar: per-track fit chi2/ndf cap; <=0 = off (default).')
-        parser.add_argument('--d0LooseDm', default=0.060, type=float,
-                            help='--dstar: d0_loose label, |m(K pi) - m_D0| [GeV] (provisional).')
-        parser.add_argument('--d0TightDm', default=0.030, type=float,
-                            help='--dstar: d0_tight label, |m(K pi) - m_D0| [GeV] (provisional).')
-        parser.add_argument('--d0TightDpvSig', default=3.0, type=float,
-                            help='--dstar: d0_tight label, minimum 3D |vtx-PV| significance (provisional).')
-        parser.add_argument('--d0TightCosPoint', default=0.99, type=float,
-                            help='--dstar: d0_tight label, minimum cos(angle) between p(D0) and (vtx-PV) (provisional).')
-        parser.add_argument('--d0TightCosStar', default=0.8, type=float,
-                            help='--dstar: d0_tight label, maximum |cos(theta*)| of the kaon in the D0 frame (provisional).')
-        parser.add_argument('--dstarLooseDm', default=0.050, type=float,
-                            help='--dstar: dstar_loose label, |m(K pi) - m_D0| [GeV] (provisional).')
-        parser.add_argument('--dstarLooseDdm', default=0.0030, type=float,
-                            help='--dstar: dstar_loose label, |dm - 0.145426| [GeV] (provisional).')
-        parser.add_argument('--dstarTightDm', default=0.025, type=float,
-                            help='--dstar: dstar_tight label, |m(K pi) - m_D0| [GeV] (provisional).')
-        parser.add_argument('--dstarTightDdm', default=0.0015, type=float,
-                            help='--dstar: dstar_tight label, |dm - 0.145426| [GeV] (provisional).')
-        parser.add_argument('--dstarTightPK', default=1.0, type=float,
-                            help='--dstar: tight labels, minimum kaon momentum [GeV] (provisional).')
-        parser.add_argument('--dstarTightPPi', default=1.0, type=float,
-                            help='--dstar: tight labels, minimum pion momentum [GeV] (provisional).')
-        parser.add_argument('--dstarTightChi2', default=10., type=float,
-                            help='--dstar: tight labels, maximum D0 vertex chi2 (provisional).')
-        parser.add_argument('--dstarTightPs', default=0.3, type=float,
-                            help='--dstar: dstar_tight label, minimum slow-pion momentum [GeV]; '
-                                 '<=0 = off. Not applied to dstar_loose (provisional).')
-        parser.add_argument('--dstarTightCosPoint', default=0.95, type=float,
-                            help='--dstar: dstar_tight label, minimum cosPoint of the D0 vertex; '
-                                 '<=-1 = off. Not applied to dstar_loose (provisional).')
-        parser.add_argument('--dstarCascade', action='store_true',
-                            help='--dstar: STAGED EXCLUSIVE mode. Instead of one all-track pass, '
-                                 'candidates are built in six ordered stages by the primary/secondary '
-                                 'pool pattern of the (K, pi, pi_s) legs, most displaced first; after '
-                                 'each stage the legs of the claimed candidates leave the pool, so the '
-                                 'later stages see far fewer combinations. The D0-alone list gets the '
-                                 'same treatment in three stages. Off by default (single pass).')
-        parser.add_argument('--dstarClaim', default='tight', choices=['tight', 'loose', 'none'],
-                            help='--dstarCascade: which candidates claim their tracks between stages '
-                                 '(right-sign only for the D* cascade); none = stage without claiming.')
-        parser.add_argument('--dstarVetoV0', action=BooleanOptionalAction, default=True,
-                            help='--dstar: exclude tracks already claimed by a tight Ks/Lambda '
-                                 'candidate from the D* and D0 pools (needs the V0 module, i.e. not '
-                                 '--oldV0). On by default; --no-dstarVetoV0 turns it off.')
+        parser.add_argument('--noPhiKK', action='store_true',
+                            help='Skip the phi(1020)->K+K- finder (no phikk_*/truephi_* branches).')
+        parser.add_argument('--noDstar', action='store_true',
+                            help='Skip the D*+ -> D0(K pi) pi_slow finder (no dstar_*/d0_*/truedstar_*/trued0_* branches).')
         parser.add_argument('--excludeRuns', nargs='+', default=[], type=int, metavar='RUN',
                             help='data only: veto these run numbers before any selection (eventsProcessed still counts the raw input).')
         # Parse additional arguments not known to the FCCAnalyses parsers
@@ -193,6 +228,8 @@ class Analysis():
         self.do_v0new = not self.ana_args.oldV0
         self.do_svnew = not self.ana_args.oldSV
         self.do_pvnew = not self.ana_args.oldPV
+        self.do_phikk = not self.ana_args.noPhiKK
+        self.do_dstar = not self.ana_args.noDstar
         # V0 truth matching needs generator information: MC only.
         self.do_truth = self.do_v0new and not self.ana_args.doData
 
@@ -234,9 +271,8 @@ class Analysis():
         #set the input/output directories:
         if self.ana_args.doData:
             self.input_dir = "/eos/experiment/fcc/ee/analyses/case-studies/aleph/LEP1_DATA/"
-            import os as _os
-            _r = _os.environ.get("ALEPH_RECLUS_DIR")
-            if _r and _os.path.isdir(_r):
+            _r = os.environ.get("ALEPH_RECLUS_DIR")
+            if _r and os.path.isdir(_r):
                 print(f"----> INPUT OVERRIDE (ALEPH_RECLUS_DIR): {_r}")
                 self.input_dir = _r
             self.output_dir_eos = f"/eos/experiment/fcc/ee/analyses/case-studies/aleph/processedData/{self.ana_args.year}/stage1/{self.ana_args.tag}"
@@ -256,11 +292,11 @@ class Analysis():
 
             else:
                 self.process_list = {
-                    "1994" : {"fraction" : self.ana_args.fraction},
+                    "1994" : {"fraction" : self.ana_args.fraction},           
                 }
 
                 # ALEPH_OUT_DIR redirects non-batch output to a writable area
-                _o = _os.environ.get("ALEPH_OUT_DIR")
+                _o = os.environ.get("ALEPH_OUT_DIR")
                 self.output_dir = f"{_o}/wp2_data/{self.ana_args.tag}" if _o else "."
 
                 # file-level splitting for condor: one job = one data file
@@ -272,13 +308,12 @@ class Analysis():
                         },
                     }
 
-                self.n_threads = 32
+                self.n_threads = 32 
 
         else:
             self.input_dir = f"/eos/experiment/aleph/EDM4HEP/MC/{self.ana_args.year}/"
             # Optional local re-clustered input copy: the raw files have ~3 TTree
             # clusters, which caps RDataFrame at ~3-4 threads. Opt-in via env var.
-            import os
             _reclus = os.environ.get("ALEPH_RECLUS_DIR")
             if _reclus and os.path.isdir(_reclus):
                 print(f"----> INPUT OVERRIDE (ALEPH_RECLUS_DIR): {_reclus}")
@@ -306,33 +341,23 @@ class Analysis():
                 self.n_threads = 8
             
             else:
+                # ALEPH_OUT_DIR redirects non-batch output to a writable area
+                _o = os.environ.get("ALEPH_OUT_DIR")
+                self.output_dir = (f"{_o}/wp1_stage1/{self.ana_args.tag}" if _o else
+                    f"/eos/experiment/fcc/ee/analyses/case-studies/aleph/processedMC/{self.ana_args.year}/{self.ana_args.MCtype}/stage1/{self.ana_args.tag}")
+
                 #local tester for validation
                 if self.ana_args.valid:
 
-                    # local tester: node-local disk (/eos/experiment is read-only
-                    # from the batch nodes), single input file
-                    self.output_dir = f"/tmp/aleph_valid_runs/{self.ana_args.tag}"
-
-                    # re-clustered input copy (30 TTree clusters instead of 3):
-                    # lifts the RDataFrame thread cap from 3 to ~30 cores
-                    import os
-                    if os.path.isdir("/tmp/reclus_input/QQB"):
-                        self.input_dir = "/tmp/reclus_input/"
-
-                    self.process_list = {
-                        "QQB/ZM4212_40_AL" : {"fraction" : self.ana_args.fraction, "output":"ntuple_valid_tester_{}".format(self.ana_args.MCflavour)},
+                    self.process_list = { 
+                        "QQB/ZM4212_39_AL" : {"fraction" : self.ana_args.fraction, "output":"ntuple_valid_tester_{}".format(self.ana_args.MCflavour)},           
                     }
                 
-                #process full files:
+                #process full files: 
                 else:
                     self.process_list = {
-                            "QQB" : {"fraction" : self.ana_args.fraction, "output":output_name},
+                            "QQB" : {"fraction" : self.ana_args.fraction, "output":output_name},        
                         }
-
-                    # ALEPH_OUT_DIR redirects non-batch output to a writable area
-                    _o = os.environ.get("ALEPH_OUT_DIR")
-                    self.output_dir = (f"{_o}/wp1_stage1/{self.ana_args.tag}" if _o else
-                        f"/eos/experiment/fcc/ee/analyses/case-studies/aleph/processedMC/{self.ana_args.year}/{self.ana_args.MCtype}/stage1/{self.ana_args.tag}")
 
                     # file-level splitting for condor: one job = one input file
                     if self.ana_args.procfile:
@@ -357,34 +382,54 @@ class Analysis():
         # always-written prim2origIdx / sec2origIdx index-map branches, on data too.
         # analyzer_pvnew.h is loaded unconditionally too: both PV chains read the
         # selection constants it defines.
-        self.include_paths = ["analyzer.h", "analyzer_truth.h", "analyzer_pvnew.h"]
-        if self.do_v0new:
-            self.include_paths.append("analyzer_v0new.h")
-        if self.do_svnew:
-            self.include_paths.append("analyzer_svnew.h")
-        if self.ana_args.phiKK:
-            if self.ana_args.phiKKvetoV0 and not self.do_v0new:
-                print("----> ERROR: --phiKKvetoV0 needs the V0 module (the veto list comes from "
-                      "the tight Ks/Lambda claims); it is incompatible with --oldV0.")
-                exit()
-            # analyzer_v0new.h carries trackQuantityByIndex, the shared dE/dx
-            # lookup; appended only when it is not already in the list
-            if "analyzer_v0new.h" not in self.include_paths:
-                self.include_paths.append("analyzer_v0new.h")
-            self.include_paths.append("analyzer_phikk.h")
-        if self.ana_args.dstar:
-            if self.ana_args.dstarVetoV0 and not self.do_v0new:
-                print("----> ERROR: --dstarVetoV0 (on by default) needs the V0 module (the veto list "
-                      "comes from the tight Ks/Lambda claims); use --no-dstarVetoV0 to disable it.")
-                exit()
-            # analyzer_v0new.h carries invMass and trackQuantityByIndex, the
-            # shared helpers; appended only when it is not already in the list
-            if "analyzer_v0new.h" not in self.include_paths:
-                self.include_paths.append("analyzer_v0new.h")
-            self.include_paths.append("analyzer_dstar.h")
+        # analyzer_trkaux.h is unconditional: it carries the vertex-fit glue and
+        # the track auxiliaries shared by every finder, plus the always-written
+        # per-track membership and particle-flow joins.
+        self.include_paths = ["analyzer.h", "analyzer_truth.h", "analyzer_pvnew.h",
+                              "analyzer_trkaux.h"]
+        for _flag, _hdr in ((self.do_v0new, "analyzer_v0new.h"),
+                            (self.do_svnew, "analyzer_svnew.h"),
+                            (self.do_phikk, "analyzer_phikk.h"),
+                            (self.do_dstar, "analyzer_dstar.h")):
+            if _flag and _hdr not in self.include_paths:
+                self.include_paths.append(_hdr)
 
         # #submit to batch if requested:
         # self.run_batch = self.ana_args.batch # no longer supported
+
+    @staticmethod
+    def _pv_guard(expr, empty):
+        """Empty-return entry guard on the PV flag: a finder must not run on a
+        vertex the fitter did not converge on."""
+        return f"pv_converged ? {expr} : {empty}"
+
+    def _define_dedx_join(self, df):
+        """Track index -> dE/dx measurement index, once per collection per
+        event. A failed leg copies the track omega into dQdx.value, so the
+        shared dEdxValid gate is applied here and both branches read -1."""
+        for _det, _coll in DEDX_COLLS:
+            df = df.Define(f"dedxJoin_{_det}",
+                           f"FCCAnalyses::AlephV0New::dedxIndexByTrack({_coll}.dQdx.value, {_coll}.dQdx.error, _{_coll}_track.index, _Tracks_trackStates)")
+        return df
+
+    def _define_dedx(self, df, legs):
+        """dE/dx value+error per daughter-leg prefix, joined through
+        <prefix>_origIdx. STORED for the calibration, never selected on."""
+        for _pfx in legs:
+            for _det, _coll in DEDX_COLLS:
+                for _q in ("value", "error"):
+                    df = df.Define(f"{_pfx}_dEdx_{_det}_{_q}",
+                                   f"FCCAnalyses::AlephV0New::trackQuantityByIndex({_pfx}_origIdx, {_coll}.dQdx.{_q}, dedxJoin_{_det})")
+        return df
+
+    def _define_leg_pid(self, df, legs):
+        """Tri-state particle-flow charged-hadron label per daughter-leg prefix,
+        joined through <prefix>_origIdx: 1 = PF charged hadron, 0 = another PF
+        type, -1 = the track has no linked ReconstructedParticle."""
+        for _pfx in legs:
+            df = df.Define(f"{_pfx}_isChargedHad",
+                           f"FCCAnalyses::AlephTrkAux::legIsChargedHad({_pfx}_origIdx, rpOfTrack, ParticleID)")
+        return df
 
     def analyzers(self, df):
 
@@ -449,7 +494,7 @@ class Analysis():
         # Beamspot CENTRE, per run, in 10um units (see AlephSelection::get_beamspot).
         # At the origin in simulation, offset by ~0.6/0.2 mm in x/y in data.
         # The json path is passed explicitly (condor workers may not read AFS);
-        # a reference copy lives in data/. Override with $ALEPH_BEAMSPOT_JSON.
+        # Override the path with $ALEPH_BEAMSPOT_JSON.
         if self.ana_args.doData:
             beamspot_json = os.environ.get(
                 "ALEPH_BEAMSPOT_JSON",
@@ -548,7 +593,7 @@ class Analysis():
             df = df.Define("VertexObject_looseBS", "VertexFitterSimple::VertexFitter_Tk(1, RecoedPrimaryTracks_looseBS, true, {}, Beamspot_x, Beamspot_y, Beamspot_z)".format(bs_sig_legacy))
             df = df.Define("Vertex_refit_looseBS", "VertexingUtils::get_VertexData(VertexObject_looseBS)")
             df = df.Define("Vertex_refit_tlv", "TLorentzVector(Vertex_refit_looseBS.position.x, Vertex_refit_looseBS.position.y, Vertex_refit_looseBS.position.z, 0.)")
-        # for retrieving secondary tracks, use the full list of selected tracks
+        # for retrieving secondary tracks, use the full list of selected tracks 
         df = df.Define("SecondaryTracks_looseBS", "VertexFitterSimple::get_NonPrimaryTracks(trackstates_selected_baseline_flipped, RecoedPrimaryTracks_looseBS)")
 
         # original-Tracks index maps for the primary/secondary splits (truth-free
@@ -583,16 +628,6 @@ class Analysis():
 
         df = df.Define("n_primary_tracks", "ReconstructedParticle2Track::getTK_n(RecoedPrimaryTracks_looseBS)")
         df = df.Define("n_secondary_tracks", "ReconstructedParticle2Track::getTK_n(SecondaryTracks_looseBS)")
-
-        # for comparison test, fit vertex with tracks all tracks:
-        # df = df.Define("RecoedPrimaryTracks_looseBS_all_tracks", "VertexFitterSimple::get_PrimaryTracks(_Tracks_trackStates, true, {},0.,0.,0., {})".format(bs_sig_legacy, chi2max))
-        # df = df.Define("VertexObject_looseBS_all_tracks", "VertexFitterSimple::VertexFitter_Tk(1, RecoedPrimaryTracks_looseBS_all_tracks, true, {},0.,0.,0.)".format(bs_sig_legacy))
-        # df = df.Define("Vertex_refit_looseBS_all_tracks", "VertexingUtils::get_VertexData(VertexObject_looseBS_all_tracks)")
-        # df = df.Define("Vertex_refit_tlv_all_tracks", "TLorentzVector(Vertex_refit_looseBS_all_tracks.position.x, Vertex_refit_looseBS_all_tracks.position.y, Vertex_refit_looseBS_all_tracks.position.z, 0.)")
-
-        # df = df.Define("Vertex_refit_x_all_tracks", "Vertex_refit_looseBS_all_tracks.position.x")
-        # df = df.Define("Vertex_refit_y_all_tracks", "Vertex_refit_looseBS_all_tracks.position.y")
-        # df = df.Define("Vertex_refit_z_all_tracks", "Vertex_refit_looseBS_all_tracks.position.z")
 
         # for reference: vertex as stored - can be removed?
         # guarded: the Vertices.size()>0 filter below is disabled (Luka does not apply it), so this
@@ -649,8 +684,9 @@ class Analysis():
         if self.do_pvnew:
             # the old LCFIPlus finder fails OPEN under a garbage PV (its only
             # PV-dependent cut is an angle<0 rejection) -> hard skip on the flag
-            old_sv_expr = ("pv_converged ? " + old_sv_expr +
-                           " : ROOT::VecOps::RVec<FCCAnalyses::VertexingUtils::FCCAnalysesVertex>{}")
+            old_sv_expr = self._pv_guard(
+                old_sv_expr,
+                "ROOT::VecOps::RVec<FCCAnalyses::VertexingUtils::FCCAnalysesVertex>{}")
         df = df.Define("SVs_looseBS", old_sv_expr)
 
         #.. then we assign them to the closest jet based on dR (also tracks to be moved between jets, in contrast to using get_SV_jet ! )
@@ -695,7 +731,7 @@ class Analysis():
             "FCCAnalyses::AlephSelection::get_V0s_ALEPH("
             "SecondaryTracks_looseBS, "
             "VertexObject_looseBS,"
-            "1.5," #solenoidBz
+            f"{BZ}," #solenoidBz
             "true," #loose_mass_window
             "-1.," #dR preselection on track pairs (<=0 disables) - 0.4 tested, made it much worse
             "true)" #exclusive tracks (each track in at most one V0) - TESTING against ntuples-withks
@@ -731,156 +767,81 @@ class Analysis():
             df = df.Define("trackToMCs",  "FCCAnalyses::AlephTruth::buildTrackToMCs(Tracks.size(), _trackMCLink_from, _trackMCLink_to)")
             # mother-anchored true V0s (geometric daughter recovery, cm units)
             df = df.Define("trueV0s",     f"FCCAnalyses::AlephTruth::findTrueV0s({coll['GenParticles']}, mcToTracks)")
-            df = df.Define("truev0_pdg",      "trueV0s.pdg")
-            df = df.Define("truev0_p",        "trueV0s.p")
-            df = df.Define("truev0_costheta", "trueV0s.costheta")
-            df = df.Define("truev0_px",       "trueV0s.px")
-            df = df.Define("truev0_py",       "trueV0s.py")
-            df = df.Define("truev0_pz",       "trueV0s.pz")
-            df = df.Define("truev0_fd",       "trueV0s.fd")
-            df = df.Define("truev0_dpv",      "trueV0s.dpv")
-            df = df.Define("truev0_nmatched", "trueV0s.nmatched")
-            # true decay-point components [cm] (position-resolution studies)
-            df = df.Define("truev0_x",        "trueV0s.vx")
-            df = df.Define("truev0_y",        "trueV0s.vy")
-            df = df.Define("truev0_z",        "trueV0s.vz")
             # (selBaselineOrigIdx / sec2origIdx are defined unconditionally in the
             # PV block above — truth-free track-state matching, available on data)
-            # daughters surviving into the secondary-track set (0-2): separates PV-claim losses from finder losses
-            df = df.Define("truev0_nsec",        "FCCAnalyses::AlephTruth::daughtersInSecondaries(trueV0s, mcToTracks, sec2origIdx)")
             # recover which track pair each candidate came from (compiled get_V0s leaves reco_ind empty);
             # classifyV0s cross-checks this replica against V0s_event pdg/invM and throws on mismatch
-            df = df.Define("v0pairs",       "FCCAnalyses::AlephTruth::rerunV0Pairing(SecondaryTracks_looseBS, VertexObject_looseBS)")
+            df = df.Define("v0pairs",       f"FCCAnalyses::AlephTruth::rerunV0Pairing(SecondaryTracks_looseBS, VertexObject_looseBS, {BZ})")
             # truth classification of the reco V0 candidates (event order = V0s_event order)
             df = df.Define("v0truth",       f"FCCAnalyses::AlephTruth::classifyV0s(V0s_event, v0pairs, SecondaryTracks_looseBS, sec2origIdx, trackToMCs, {coll['GenParticles']}, trueV0s)")
-            df = df.Define("v0c_class",       "v0truth.cls")
-            df = df.Define("v0c_trueidx",     "v0truth.true_idx")
-            df = df.Define("v0c_pairmult",    "v0truth.pair_mult")
-            df = df.Define("v0c_trackshared", "v0truth.track_shared")
-            df = df.Define("v0c_alpha",       "v0truth.alpha")
-            df = df.Define("v0c_qt",          "v0truth.qt")
-            df = df.Define("v0c_trk1",        "v0truth.trk1")
-            df = df.Define("v0c_trk2",        "v0truth.trk2")
-            # event-order candidate kinematics (independent of jet assignment)
-            df = df.Define("v0c_pdg",         "V0s_event.pdgAbs")
-            df = df.Define("v0c_invM",        "V0s_event.invM")
-            df = df.Define("v0c_dxyz",        "FCCAnalyses::AlephTruth::candDxyz(V0s_event, VertexObject_looseBS)")
-            df = df.Define("v0c_p",           "FCCAnalyses::AlephTruth::candP(V0s_event)")
-            df = df.Define("v0c_cosPointing", "FCCAnalyses::AlephTruth::candCosPointing(V0s_event, VertexObject_looseBS)")
-            # fitted-vertex position (position-resolution studies)
-            df = df.Define("v0c_vx",          "FCCAnalyses::AlephTruth::candVtxPos(V0s_event, 0)")
-            df = df.Define("v0c_vy",          "FCCAnalyses::AlephTruth::candVtxPos(V0s_event, 1)")
-            df = df.Define("v0c_vz",          "FCCAnalyses::AlephTruth::candVtxPos(V0s_event, 2)")
-            # per-true-V0 found flags
-            df = df.Define("truev0_found_any",     "FCCAnalyses::AlephTruth::trueV0FoundAny(trueV0s, v0truth)")
-            df = df.Define("truev0_found_correct", "FCCAnalyses::AlephTruth::trueV0FoundCorrect(trueV0s, v0truth, V0s_event)")
+            for _b, _e in TRUEV0_DEFINES:
+                df = df.Define(f"truev0_{_b}", _e)
+            for _b, _e in V0C_DEFINES:
+                df = df.Define(f"v0c_{_b}", _e)
+
+        # track -> ReconstructedParticle join, for the per-leg PF label and the
+        # pfcand join key (begin != end is the "has a track" test)
+        df = df.Define("rpOfTrack",
+                       "FCCAnalyses::AlephTrkAux::rpIndexByTrack(RecoParticles.tracks_begin, RecoParticles.tracks_end, _RecoParticles_tracks.index, Tracks.size())")
+        # dE/dx track->measurement join, shared by every daughter-leg block
+        if self.do_v0new or self.do_phikk or self.do_dstar:
+            df = self._define_dedx_join(df)
 
         ############################################# Standalone two-tier V0 module ###########################################
         if self.do_v0new:
-            if self.ana_args.v0nLamPointKsTiers and self.ana_args.v0nWideLamLoose:
-                print("----> ERROR: --v0nLamPointKsTiers and --v0nWideLamLoose are separate "
-                      "single-purpose variants; combining them is not supported.")
-                exit()
-            v0n_finder = ("findV0sLamKsPointing" if self.ana_args.v0nLamPointKsTiers
-                          else "findV0sWideLamLoose" if self.ana_args.v0nWideLamLoose
-                          else "findV0s")
-            v0n_expr = f"FCCAnalyses::AlephV0New::{v0n_finder}(SecondaryTracks_looseBS, VertexObject_looseBS, {BZ})"
+            v0n_expr = f"FCCAnalyses::AlephV0New::findV0s(SecondaryTracks_looseBS, VertexObject_looseBS, {BZ})"
             if self.do_pvnew:
                 # explicit empty-return entry guard on the flag (the window
                 # cuts would empty it anyway, a silent efficiency loss; the
                 # guard makes the failure explicit and empties pointSig too)
-                v0n_expr = ("pv_converged ? " + v0n_expr +
-                            " : FCCAnalyses::VertexingUtils::FCCAnalysesV0{}")
+                v0n_expr = self._pv_guard(
+                    v0n_expr, "FCCAnalyses::VertexingUtils::FCCAnalysesV0{}")
             df = df.Define("V0sNew_event", v0n_expr)
             df = df.Define("n_v0n_event",  "int(V0sNew_event.vtx.size())")
-            df = df.Define("v0n_pdg",      "V0sNew_event.pdgAbs")
-            df = df.Define("v0n_invM",     "V0sNew_event.invM")
             # truth-free kinematic branches (available on data)
-            df = df.Define("v0n_alpha",       "FCCAnalyses::AlephV0New::candAlpha(V0sNew_event, SecondaryTracks_looseBS)")
-            df = df.Define("v0n_qt",          "FCCAnalyses::AlephV0New::candQt(V0sNew_event)")
-            df = df.Define("v0n_chi2",        "FCCAnalyses::AlephTruth::candChi2(V0sNew_event)")
-            df = df.Define("v0n_dxyz",        "FCCAnalyses::AlephTruth::candDxyz(V0sNew_event, VertexObject_looseBS)")
-            df = df.Define("v0n_p",           "FCCAnalyses::AlephTruth::candP(V0sNew_event)")
-            # momentum VECTOR of the same summed vertex momentum as v0n_p
-            # (direction-dependent offline studies: pointing at any reference)
-            for ic, cc in enumerate("xyz"):
-                df = df.Define(f"v0n_p{cc}",  f"FCCAnalyses::AlephTruth::candPcomp(V0sNew_event, {ic})")
-            df = df.Define("v0n_cosPointing", "FCCAnalyses::AlephTruth::candCosPointing(V0sNew_event, VertexObject_looseBS)")
-            df = df.Define("v0n_pointSig",    "FCCAnalyses::AlephV0New::candPointSig(V0sNew_event, VertexObject_looseBS)")
-            # two-tier module: 1 = adopted tight package, 0 = loose training tier.
-            # Selecting v0n_tight==1 reproduces the historical tight-only output exactly.
-            df = df.Define("v0n_tight",       "FCCAnalyses::AlephV0New::candTight(V0sNew_event, VertexObject_looseBS, SecondaryTracks_looseBS)")
-            # ML-input pulls: cut variables in resolution units (signed; -999 undefined).
-            df = df.Define("v0n_bandSig",     "FCCAnalyses::AlephV0New::candBandSig(V0sNew_event, SecondaryTracks_looseBS)")
-            df = df.Define("v0n_massSig",     "FCCAnalyses::AlephV0New::candMassSig(V0sNew_event)")
-            # V0 vertex-fit covariance (packed lower triangle, cm^2 — same
-            # component order as Vertex_refit_cov_*)
-            for ic, cc in enumerate(("xx", "yx", "yy", "zx", "zy", "zz")):
-                df = df.Define(f"v0n_cov_{cc}", f"FCCAnalyses::AlephV0New::candCovComp(V0sNew_event, {ic})")
+            for _b, _e in V0N_CAND_DEFINES:
+                df = df.Define(f"v0n_{_b}", _e)
             # per-daughter joins + dE/dx (truth-free: reco_ind -> sec2origIdx).
             # dE/dx validity: value != omega(track) (failed-leg sentinel),
             # finite positive value and error; invalid -> -1 in both branches.
-            df = df.Define("v0n_trk1_origIdx", "FCCAnalyses::AlephV0New::candDaughterOrigIdx(V0sNew_event, sec2origIdx, 0)")
-            df = df.Define("v0n_trk2_origIdx", "FCCAnalyses::AlephV0New::candDaughterOrigIdx(V0sNew_event, sec2origIdx, 1)")
-            for trk in ("trk1", "trk2"):
-                for det, dedx_coll in (("pads", "dEdxPads"), ("wires", "dEdxWires")):
-                    df = df.Define(f"v0n_{trk}_dEdx_{det}_value",
-                                   f"FCCAnalyses::AlephV0New::trackQuantityByIndex(v0n_{trk}_origIdx, {dedx_coll}.dQdx.value, {dedx_coll}.dQdx.value, {dedx_coll}.dQdx.error, _{dedx_coll}_track.index, _Tracks_trackStates)")
-                    df = df.Define(f"v0n_{trk}_dEdx_{det}_error",
-                                   f"FCCAnalyses::AlephV0New::trackQuantityByIndex(v0n_{trk}_origIdx, {dedx_coll}.dQdx.error, {dedx_coll}.dQdx.value, {dedx_coll}.dQdx.error, _{dedx_coll}_track.index, _Tracks_trackStates)")
-            # fitted-vertex position (position-resolution studies)
-            df = df.Define("v0n_vx",          "FCCAnalyses::AlephTruth::candVtxPos(V0sNew_event, 0)")
-            df = df.Define("v0n_vy",          "FCCAnalyses::AlephTruth::candVtxPos(V0sNew_event, 1)")
-            df = df.Define("v0n_vz",          "FCCAnalyses::AlephTruth::candVtxPos(V0sNew_event, 2)")
+            for _i, _t in enumerate(V0N_TRKS):
+                df = df.Define(f"v0n_{_t}_origIdx",
+                               f"FCCAnalyses::AlephV0New::candDaughterOrigIdx(V0sNew_event, sec2origIdx, {_i})")
+            df = self._define_dedx(df, [f"v0n_{_t}" for _t in V0N_TRKS])
+            df = self._define_leg_pid(df, [f"v0n_{_t}" for _t in V0N_TRKS])
             # per-jet new-module V0s: mirror of the old-finder v0_* block on
             # V0sNew_event, so v0_* vs v0njet_* is an apples-to-apples comparison
             # at jet level (prel = pT wrt jet axis, thetarel/phirel wrt the jet).
             df = df.Define("v0njet_per_jet", "FCCAnalyses::AlephSelection::assign_V0s_to_jets(V0sNew_event, jets)")
             df = df.Define("v0njet_jets",  "v0njet_per_jet.vtx")
-            df = df.Define("v0njet_pdg",   "v0njet_per_jet.pdgAbs")
-            df = df.Define("v0njet_invM",  "v0njet_per_jet.invM")
+            for _b, _e in V0NJET_DEFINES:
+                df = df.Define(f"v0njet_{_b}", _e)
             df = df.Define("n_v0njet_jets",    "FCCAnalyses::VertexingUtils::get_n_SV_jets(v0njet_jets)")
             df = df.Define("n_v0njet_ks",      "FCCAnalyses::AlephSelection::count_V0type_jets(v0njet_pdg, 310)")
             df = df.Define("n_v0njet_lambda",  "FCCAnalyses::AlephSelection::count_V0type_jets(v0njet_pdg, 3122)")
-            df = df.Define("v0njet_chi2",          "FCCAnalyses::VertexingUtils::get_chi2_SV(v0njet_jets)")
-            df = df.Define("v0njet_chi2_norm",     "FCCAnalyses::VertexingUtils::get_norm_chi2_SV(v0njet_jets)")
-            df = df.Define("v0njet_ndof",          "FCCAnalyses::VertexingUtils::get_nDOF_SV(v0njet_jets)")
-            df = df.Define("v0njet_ntracks",       "FCCAnalyses::VertexingUtils::get_VertexNtrk(v0njet_jets)")
-            df = df.Define("v0njet_p",             "FCCAnalyses::VertexingUtils::get_pMag_SV(v0njet_jets)")
-            df = df.Define("v0njet_prel",          "FCCAnalyses::AlephSelection::get_prel_SV_jets(v0njet_jets, jets)")
-            df = df.Define("v0njet_thetarel",      "FCCAnalyses::VertexingUtils::get_relTheta_SV(v0njet_jets, jets)")
-            df = df.Define("v0njet_phirel",        "FCCAnalyses::VertexingUtils::get_relPhi_SV(v0njet_jets, jets)")
-            df = df.Define("v0njet_dxy",           "FCCAnalyses::VertexingUtils::get_dxy_SV(v0njet_jets, VertexObject_looseBS)")
-            df = df.Define("v0njet_dxyz",          "FCCAnalyses::VertexingUtils::get_d3d_SV(v0njet_jets, VertexObject_looseBS)")
-            df = df.Define("v0njet_cosPointing",   "FCCAnalyses::AlephSelection::get_pointingangle_SV(v0njet_jets, VertexObject_looseBS)")
-            df = df.Define("v0njet_correctedMass", "FCCAnalyses::AlephSelection::get_correctedInvMass_SV(v0njet_jets, VertexObject_looseBS)")
-            df = df.Define("v0njet_dx",  "FCCAnalyses::AlephSelection::get_dx_SV_jets(v0njet_jets, PrimaryVertexP3)")
-            df = df.Define("v0njet_dy",  "FCCAnalyses::AlephSelection::get_dy_SV_jets(v0njet_jets, PrimaryVertexP3)")
-            df = df.Define("v0njet_dz",  "FCCAnalyses::AlephSelection::get_dz_SV_jets(v0njet_jets, PrimaryVertexP3)")
             # truth classification (MC only; reco_ind is filled by the new module)
             if self.do_truth:
                 df = df.Define("v0npairs",     "FCCAnalyses::AlephTruth::pairsFromRecoInd(V0sNew_event)")
                 df = df.Define("v0ntruth",     f"FCCAnalyses::AlephTruth::classifyV0s(V0sNew_event, v0npairs, SecondaryTracks_looseBS, sec2origIdx, trackToMCs, {coll['GenParticles']}, trueV0s)")
-                df = df.Define("v0n_class",       "v0ntruth.cls")
-                df = df.Define("v0n_trueidx",     "v0ntruth.true_idx")
-                df = df.Define("v0n_pairmult",    "v0ntruth.pair_mult")
-                df = df.Define("v0n_trackshared", "v0ntruth.track_shared")
-                df = df.Define("v0n_trk1",        "v0ntruth.trk1")
-                df = df.Define("v0n_trk2",        "v0ntruth.trk2")
-                df = df.Define("truev0_foundnew_any",     "FCCAnalyses::AlephTruth::trueV0FoundAny(trueV0s, v0ntruth)")
-                df = df.Define("truev0_foundnew_correct", "FCCAnalyses::AlephTruth::trueV0FoundCorrect(trueV0s, v0ntruth, V0sNew_event)")
+                for _n, _e in V0N_TRUTH_DEFINES:
+                    df = df.Define(_n, _e)
 
         ############################################# Standalone SV module ####################################################
         if self.do_svnew:
             # V0-first: svn_* = SV finding after masking the tight-claimed V0 tracks;
             # svm_* = unmasked control twin from the SAME event, for the interplay study.
             SVNEW = "FCCAnalyses::AlephSVNew"
+            # two-track seed pass, shared by both masking modes
+            seed_expr = f"{SVNEW}::svSeedPass(SecondaryTracks_looseBS, VertexObject_looseBS, {BZ})"
+            if self.do_pvnew:
+                seed_expr = self._pv_guard(seed_expr, f"{SVNEW}::SVSeeds{{}}")
+            df = df.Define("SVSeeds_event", seed_expr)
             for pfx, mode in (("svn", f"{SVNEW}::SVN_MASK_MODE"), ("svm", f"{SVNEW}::SVN_MASK_NONE")):
-                svn_expr = f"{SVNEW}::findSVs(SecondaryTracks_looseBS, VertexObject_looseBS, V0sNew_event, v0n_tight, {mode}, {BZ})"
+                svn_expr = f"{SVNEW}::findSVs(SecondaryTracks_looseBS, VertexObject_looseBS, V0sNew_event, v0n_tight, {mode}, {BZ}, SVSeeds_event)"
                 if self.do_pvnew:
                     # explicit entry guard (see V0sNew_event above)
-                    svn_expr = ("pv_converged ? " + svn_expr +
-                                " : FCCAnalyses::VertexingUtils::FCCAnalysesV0{}")
+                    svn_expr = self._pv_guard(
+                        svn_expr, "FCCAnalyses::VertexingUtils::FCCAnalysesV0{}")
                 df = df.Define(f"SVs_{pfx}", svn_expr)
                 df = df.Define(f"n_{pfx}_event",    f"int(SVs_{pfx}.vtx.size())")
                 df = df.Define(f"{pfx}_mass",        f"SVs_{pfx}.invM")
@@ -910,130 +871,83 @@ class Analysis():
             df = df.Define("v0n_svnPointSig", "v0n_svnpoint.pointSig")
             df = df.Define("v0n_svnIdx",      "v0n_svnpoint.svIdx")
 
-        ############################################# phi(1020) -> K+K- module (--phiKK) ######################################
-        if self.ana_args.phiKK:
-            a = self.ana_args
-            # Pairs are formed from the FULL baseline-selected track list:
-            # primary and secondary tracks alike, no masking by the PV split
-            # or by other finders' claims (the Ks/Lambda veto is opt-in).
-            # selBaselineOrigIdx maps that collection to the original Tracks,
-            # which is how the per-track auxiliaries below are joined.
-            df = df.Define("phikk_nvdet_all", "FCCAnalyses::AlephPhiKK::subdetHits(selBaselineOrigIdx, Tracks.subdetectorHitNumbers_begin, Tracks.subdetectorHitNumbers_end, _Tracks_subdetectorHitNumbers, 0)")
-            df = df.Define("phikk_nitc_all",  "FCCAnalyses::AlephPhiKK::subdetHits(selBaselineOrigIdx, Tracks.subdetectorHitNumbers_begin, Tracks.subdetectorHitNumbers_end, _Tracks_subdetectorHitNumbers, 1)")
-            df = df.Define("phikk_chi2ndf_all", "FCCAnalyses::AlephPhiKK::trackChi2Ndf(selBaselineOrigIdx, Tracks.chi2, Tracks.ndf)")
-            df = df.Define("phikk_isprim_all",  "FCCAnalyses::AlephPhiKK::flagInSet(selBaselineOrigIdx, prim2origIdx)")
-            if a.phiKKvetoV0:
-                df = df.Define("phikk_veto_orig", "FCCAnalyses::AlephPhiKK::claimedOrigIdx(v0n_trk1_origIdx, v0n_trk2_origIdx, v0n_tight)")
+        ############################################# exclusive-finder track auxiliaries ######################################
+        if self.do_phikk or self.do_dstar:
+            # Both finders build candidates from the FULL baseline-selected
+            # track list: primary and secondary tracks alike, no masking by the
+            # PV split. selBaselineOrigIdx maps that collection to the original
+            # Tracks, which is how these per-track auxiliaries are joined.
+            TRKAUX = "FCCAnalyses::AlephTrkAux"
+            df = df.Define("trkaux_nvdet", f"{TRKAUX}::subdetHits(selBaselineOrigIdx, Tracks.subdetectorHitNumbers_begin, Tracks.subdetectorHitNumbers_end, _Tracks_subdetectorHitNumbers, 0)")
+            df = df.Define("trkaux_nitc",  f"{TRKAUX}::subdetHits(selBaselineOrigIdx, Tracks.subdetectorHitNumbers_begin, Tracks.subdetectorHitNumbers_end, _Tracks_subdetectorHitNumbers, 1)")
+            df = df.Define("trkaux_chi2ndf", f"{TRKAUX}::trackChi2Ndf(selBaselineOrigIdx, Tracks.chi2, Tracks.ndf)")
+            df = df.Define("trkaux_isprim",  f"{TRKAUX}::flagInSet(selBaselineOrigIdx, prim2origIdx)")
+            # tracks claimed as daughters of a tight Ks/Lambda leave BOTH pools;
+            # the claim list is a V0-module product, so under --oldV0 it is empty
+            if self.do_v0new:
+                df = df.Define("v0n_claimed_orig", f"{TRKAUX}::claimedOrigIdx(v0n_trk1_origIdx, v0n_trk2_origIdx, v0n_tight)")
             else:
-                df = df.Define("phikk_veto_orig", "ROOT::VecOps::RVec<int>{}")
-            # unset knobs are passed by constant NAME so the header stays the single source
-            def knob(v, cname):
-                return f"FCCAnalyses::AlephPhiKK::{cname}" if v is None else str(v)
-            phikk_args = ", ".join([
-                str(BZ), knob(a.phiKKmLo, "M_LO"), knob(a.phiKKmHi, "M_HI"), knob(a.phiKKchi2, "CHI2_CUT"),
-                str(a.phiKKapBand), str(a.phiKKdpv), knob(a.phiKKdpvFid, "DPV_FID"),
-                str(a.phiKKdpvSig),
-                str(a.phiKKsigd0), str(a.phiKKminHits), str(a.phiKKtrkChi2),
-                knob(a.phiKKpMin, "P_MIN_DEF"),
-                "false" if a.phiKKnoSameSign else "true",
-                "FCCAnalyses::AlephPhiKK::PRE_MARGIN",
-                "phikk_veto_orig",
-            ])
-            df = df.Define("PhiKKCands_event",
-                           "FCCAnalyses::AlephPhiKK::findPhiKK(trackstates_selected_baseline_flipped, "
-                           "selBaselineOrigIdx, phikk_nvdet_all, phikk_nitc_all, phikk_chi2ndf_all, "
-                           f"phikk_isprim_all, VertexObject_looseBS, {phikk_args})")
+                df = df.Define("v0n_claimed_orig", "ROOT::VecOps::RVec<int>{}")
+
+        ############################################# phi(1020) -> K+K- module ################################################
+        if self.do_phikk:
+            # every selection value is a constant in analyzer_phikk.h
+            phikk_expr = ("FCCAnalyses::AlephPhiKK::findPhiKK(trackstates_selected_baseline_flipped, "
+                          "selBaselineOrigIdx, trkaux_nvdet, trkaux_nitc, trkaux_chi2ndf, "
+                          f"trkaux_isprim, VertexObject_looseBS, {BZ}, v0n_claimed_orig)")
+            if self.do_pvnew:
+                # explicit entry guard (see V0sNew_event above)
+                phikk_expr = self._pv_guard(
+                    phikk_expr, "FCCAnalyses::AlephPhiKK::PhiKKCands{}")
+            df = df.Define("PhiKKCands_event", phikk_expr)
             df = df.Define("n_phikk_event", "int(PhiKKCands_event.invM.size())")
-            for _b in ("invM", "p", "px", "py", "pz", "alpha", "qt", "bandEll",
-                       "chi2", "vx", "vy", "vz", "dpv", "dpvSig", "same_sign",
-                       "wp", "tight"):
+            for _b in PHIKK_CAND_BRANCHES:
                 df = df.Define(f"phikk_{_b}", f"PhiKKCands_event.{_b}")
-            for _t in ("trk1", "trk2"):
-                for _b in ("origIdx", "q", "p", "costheta", "d0", "z0", "sigd0",
-                           "nvdet", "nitc", "chi2ndf", "isprim"):
-                    df = df.Define(f"phikk_{_t}_{_b}", f"PhiKKCands_event.{_t}_{_b}")
-                # daughter dE/dx: STORED for the calibration, never selected on.
-                # A failed leg copies the track omega into dQdx.value, so the
-                # shared dEdxValid gate gives -1 in both value and error.
-                for _det, _coll in (("pads", "dEdxPads"), ("wires", "dEdxWires")):
-                    df = df.Define(f"phikk_{_t}_dEdx_{_det}_value",
-                                   f"FCCAnalyses::AlephV0New::trackQuantityByIndex(phikk_{_t}_origIdx, {_coll}.dQdx.value, {_coll}.dQdx.value, {_coll}.dQdx.error, _{_coll}_track.index, _Tracks_trackStates)")
-                    df = df.Define(f"phikk_{_t}_dEdx_{_det}_error",
-                                   f"FCCAnalyses::AlephV0New::trackQuantityByIndex(phikk_{_t}_origIdx, {_coll}.dQdx.error, {_coll}.dQdx.value, {_coll}.dQdx.error, _{_coll}_track.index, _Tracks_trackStates)")
+            for _t in PHIKK_TRKS:
+                for _b in PHIKK_TRK_BRANCHES:
+                    df = df.Define(f"phikk_{_t}_{_b}", f"PhiKKCands_event.{_t}.{_b}")
+            df = self._define_dedx(df, [f"phikk_{_t}" for _t in PHIKK_TRKS])
+            df = self._define_leg_pid(df, [f"phikk_{_t}" for _t in PHIKK_TRKS])
             if self.do_truth:
                 df = df.Define("truePhis", f"FCCAnalyses::AlephPhiKK::findTruePhis({coll['GenParticles']}, mcToTracks)")
-                for _b in ("mothPdg", "origin", "p", "pt", "costheta",
-                           "px", "py", "pz", "vx", "vy", "vz", "nmatched"):
+                for _b in TRUEPHI_BRANCHES:
                     df = df.Define(f"truephi_{_b}", f"truePhis.{_b}")
-                df = df.Define("truephi_dauPlus_p",  "truePhis.dauPlus_p")
-                df = df.Define("truephi_dauMinus_p", "truePhis.dauMinus_p")
                 df = df.Define("n_truephi_event",    "int(truePhis.idx.size())")
                 df = df.Define("phikktruth", f"FCCAnalyses::AlephPhiKK::classifyPhiKK(PhiKKCands_event, trackToMCs, {coll['GenParticles']}, truePhis)")
                 df = df.Define("phikk_class",        "phikktruth.cls")
                 df = df.Define("phikk_trueidx",      "phikktruth.truephi_idx")
-                for _t in ("trk1", "trk2"):
-                    df = df.Define(f"phikk_{_t}_mcpdg",   f"phikktruth.{_t}_mcpdg")
-                    df = df.Define(f"phikk_{_t}_mothpdg", f"phikktruth.{_t}_mothpdg")
+                for _t in PHIKK_TRKS:
+                    for _b in TRK_TRUTH_BRANCHES:
+                        df = df.Define(f"phikk_{_t}_{_b}", f"phikktruth.{_t}_{_b}")
                 df = df.Define("truephi_found", "FCCAnalyses::AlephPhiKK::truePhiFound(truePhis, phikktruth)")
 
-        ############################################# D*->D0(K pi) pi_slow module (--dstar) ###################################
-        if self.ana_args.dstar:
-            a = self.ana_args
-            # Candidates are built from the FULL baseline-selected track list:
-            # primary and secondary tracks alike, no masking by the PV split.
-            # selBaselineOrigIdx maps that collection to the original Tracks,
-            # which is how the per-track auxiliaries below are joined.
-            df = df.Define("dstar_nvdet_all", "FCCAnalyses::AlephDstar::subdetHits(selBaselineOrigIdx, Tracks.subdetectorHitNumbers_begin, Tracks.subdetectorHitNumbers_end, _Tracks_subdetectorHitNumbers, 0)")
-            df = df.Define("dstar_nitc_all",  "FCCAnalyses::AlephDstar::subdetHits(selBaselineOrigIdx, Tracks.subdetectorHitNumbers_begin, Tracks.subdetectorHitNumbers_end, _Tracks_subdetectorHitNumbers, 1)")
-            df = df.Define("dstar_chi2ndf_all", "FCCAnalyses::AlephDstar::trackChi2Ndf(selBaselineOrigIdx, Tracks.chi2, Tracks.ndf)")
-            df = df.Define("dstar_isprim_all",  "FCCAnalyses::AlephDstar::flagInSet(selBaselineOrigIdx, prim2origIdx)")
-            # staging class of every pool track (0 prim / 1 sec / 2 neither)
+        ############################################# D*->D0(K pi) pi_slow module #############################################
+        if self.do_dstar:
+            # primary/secondary class of every pool track (0 prim / 1 sec / 2 neither)
             df = df.Define("dstar_pool_all",    "FCCAnalyses::AlephDstar::poolClass(selBaselineOrigIdx, prim2origIdx, sec2origIdx)")
-            if a.dstarVetoV0:
-                df = df.Define("dstar_veto_orig", "FCCAnalyses::AlephDstar::claimedOrigIdx(v0n_trk1_origIdx, v0n_trk2_origIdx, v0n_tight)")
-            else:
-                df = df.Define("dstar_veto_orig", "ROOT::VecOps::RVec<int>{}")
-            dstar_claim = {"tight": 1, "loose": 2, "none": 0}[a.dstarClaim]
-            dstar_args = ", ".join([
-                str(BZ), str(a.dstarMLo), str(a.dstarMHi), str(a.dstarChi2),
-                str(a.dstarDpvMax), str(a.dstarDmMax),
-                str(a.dstarPMin), str(a.dstarPsMin),
-                str(a.dstarSigd0), str(a.dstarMinHits), str(a.dstarTrkChi2),
-                str(a.d0LooseDm), str(a.d0TightDm), str(a.d0TightDpvSig),
-                str(a.d0TightCosPoint), str(a.d0TightCosStar),
-                str(a.dstarLooseDm), str(a.dstarLooseDdm),
-                str(a.dstarTightDm), str(a.dstarTightDdm),
-                str(a.dstarTightPK), str(a.dstarTightPPi), str(a.dstarTightChi2),
-                str(a.dstarTightPs), str(a.dstarTightCosPoint),
-                "FCCAnalyses::AlephDstar::PRE_MARGIN",
-                "true" if a.dstarCascade else "false", str(dstar_claim),
-                "dstar_veto_orig",
-            ])
-            df = df.Define("DstarCands_event",
-                           "FCCAnalyses::AlephDstar::findDstar(trackstates_selected_baseline_flipped, "
-                           "selBaselineOrigIdx, dstar_nvdet_all, dstar_nitc_all, dstar_chi2ndf_all, "
-                           f"dstar_isprim_all, dstar_pool_all, VertexObject_looseBS, {dstar_args})")
-            df = df.Define("n_d0_event",    "int(DstarCands_event.d0.m_kpi.size())")
-            df = df.Define("n_dstar_event", "int(DstarCands_event.ds.m_kpi.size())")
+            # every selection value is a constant in analyzer_dstar.h
+            dstar_expr = ("FCCAnalyses::AlephDstar::findDstar(trackstates_selected_baseline_flipped, "
+                          "selBaselineOrigIdx, trkaux_nvdet, trkaux_nitc, trkaux_chi2ndf, "
+                          "trkaux_isprim, dstar_pool_all, VertexObject_looseBS, v0n_claimed_orig, "
+                          f"{BZ})")
+            if self.do_pvnew:
+                # explicit entry guard (see V0sNew_event above)
+                dstar_expr = self._pv_guard(
+                    dstar_expr, "FCCAnalyses::AlephDstar::DstarCands{}")
+            df = df.Define("DstarCands_event", dstar_expr)
+            df = df.Define("n_d0_event",    "int(DstarCands_event.d0.kin.m_kpi.size())")
+            df = df.Define("n_dstar_event", "int(DstarCands_event.ds.kin.m_kpi.size())")
             # two-track fits actually performed (cache misses): the combinatorial cost
             df = df.Define("n_d0fits_event", "DstarCands_event.nfits")
             for _b in D0_CAND_BRANCHES:
-                df = df.Define(f"d0_{_b}", f"DstarCands_event.d0.{_b}")
+                df = df.Define(f"d0_{_b}", f"DstarCands_event.{_cand_member('d0', _b)}")
             for _b in DSTAR_CAND_BRANCHES:
-                df = df.Define(f"dstar_{_b}", f"DstarCands_event.ds.{_b}")
-            for _pfx, _mem in (("d0_trkK", "d0.trkK"), ("d0_trkPi", "d0.trkPi"),
-                               ("dstar_trkK", "ds.trkK"), ("dstar_trkPi", "ds.trkPi"),
-                               ("dstar_trkPis", "ds.trkPis")):
+                df = df.Define(f"dstar_{_b}", f"DstarCands_event.{_cand_member('ds', _b)}")
+            for _pfx, _mem in DSTAR_TRK_LEGS:
                 for _b in DSTAR_TRK_BRANCHES:
                     df = df.Define(f"{_pfx}_{_b}", f"DstarCands_event.{_mem}.{_b}")
-                # daughter dE/dx: STORED for the calibration, never selected on.
-                # A failed leg copies the track omega into dQdx.value, so the
-                # shared dEdxValid gate gives -1 in both value and error.
-                for _det, _coll in (("pads", "dEdxPads"), ("wires", "dEdxWires")):
-                    df = df.Define(f"{_pfx}_dEdx_{_det}_value",
-                                   f"FCCAnalyses::AlephV0New::trackQuantityByIndex({_pfx}_origIdx, {_coll}.dQdx.value, {_coll}.dQdx.value, {_coll}.dQdx.error, _{_coll}_track.index, _Tracks_trackStates)")
-                    df = df.Define(f"{_pfx}_dEdx_{_det}_error",
-                                   f"FCCAnalyses::AlephV0New::trackQuantityByIndex({_pfx}_origIdx, {_coll}.dQdx.error, {_coll}.dQdx.value, {_coll}.dQdx.error, _{_coll}_track.index, _Tracks_trackStates)")
+            df = self._define_dedx(df, [_pfx for _pfx, _ in DSTAR_TRK_LEGS])
+            df = self._define_leg_pid(df, [_pfx for _pfx, _ in DSTAR_TRK_LEGS])
             if self.do_truth:
                 # the primary/secondary pool of each true daughter, measured
                 # through its linked track (prim2origIdx / sec2origIdx)
@@ -1051,23 +965,43 @@ class Analysis():
                 df = df.Define("d0_trueidx",    "d0truth.trueidx")
                 df = df.Define("dstar_class",   "dstartruth.cls")
                 df = df.Define("dstar_trueidx", "dstartruth.trueidx")
-                for _t in ("trkK", "trkPi"):
-                    df = df.Define(f"d0_{_t}_mcpdg",   f"d0truth.{_t}_mcpdg")
-                    df = df.Define(f"d0_{_t}_mothpdg", f"d0truth.{_t}_mothpdg")
-                for _t in ("trkK", "trkPi", "trkPis"):
-                    df = df.Define(f"dstar_{_t}_mcpdg",   f"dstartruth.{_t}_mcpdg")
-                    df = df.Define(f"dstar_{_t}_mothpdg", f"dstartruth.{_t}_mothpdg")
+                for _t in D0_TRKS:
+                    for _b in TRK_TRUTH_BRANCHES:
+                        df = df.Define(f"d0_{_t}_{_b}", f"d0truth.{_t}_{_b}")
+                for _t in DSTAR_TRKS:
+                    for _b in TRK_TRUTH_BRANCHES:
+                        df = df.Define(f"dstar_{_t}_{_b}", f"dstartruth.{_t}_{_b}")
                 # per-true-particle efficiency flags (class-1 candidate carrying the label)
                 df = df.Define("trued0_found_loose",    "FCCAnalyses::AlephDstar::trueD0Found(trueD0s, d0truth, d0_loose)")
                 df = df.Define("trued0_found_tight",    "FCCAnalyses::AlephDstar::trueD0Found(trueD0s, d0truth, d0_tight)")
                 df = df.Define("truedstar_found_loose", "FCCAnalyses::AlephDstar::trueDstarFound(trueDstars, dstartruth, dstar_loose)")
                 df = df.Define("truedstar_found_tight", "FCCAnalyses::AlephDstar::trueDstarFound(trueDstars, dstartruth, dstar_tight)")
 
+        ############################################# per-track membership ####################################################
+        # One pass over the finished candidate lists: which sets and stored
+        # candidates each ORIGINAL track belongs to. trk_nCand is the
+        # multiplicity the offline 1/n de-duplication weight needs.
+        _EMPTY = "ROOT::VecOps::RVec<int>{}"
+        _v0 = ("v0n_trk1_origIdx, v0n_trk2_origIdx, v0n_tight" if self.do_v0new
+               else f"{_EMPTY}, {_EMPTY}, {_EMPTY}")
+        _phi = ("phikk_trk1_origIdx, phikk_trk2_origIdx, phikk_wp" if self.do_phikk
+                else f"{_EMPTY}, {_EMPTY}, {_EMPTY}")
+        _ds = ("d0_trkK_origIdx, d0_trkPi_origIdx, dstar_trkK_origIdx, "
+               "dstar_trkPi_origIdx, dstar_trkPis_origIdx, dstar_tight"
+               if self.do_dstar else ", ".join([_EMPTY] * 6))
+        _sv = "svn_trk_idx" if self.do_svnew else _EMPTY
+        df = df.Define("trkTags",
+                       "FCCAnalyses::AlephTrkAux::trackTags(Tracks.size(), "
+                       f"selBaselineOrigIdx, prim2origIdx, {_sv}, sec2origIdx, "
+                       f"{_v0}, {_phi}, {_ds})")
+        df = df.Define("trk_member", "trkTags.member")
+        df = df.Define("trk_nCand",  "trkTags.nCand")
+
         ############################################# Particle Flow Level Variables #######################################################
         df = df.Define("pfcand_isMu",     "AlephSelection::get_isType(jetConstitutentsTypes,2)")
         df = df.Define("pfcand_isEl",     "AlephSelection::get_isType(jetConstitutentsTypes,1)")
         df = df.Define("pfcand_isGamma",  "AlephSelection::get_isType(jetConstitutentsTypes,4)")
-        df = df.Define("pfcand_isChargedHad", "AlephSelection::get_isType(jetConstitutentsTypes,0)")
+        df = df.Define("pfcand_isChargedHad", f"AlephSelection::get_isType(jetConstitutentsTypes,{PF_CHARGED_HAD})")
         df = df.Define("pfcand_isNeutralHad", "AlephSelection::get_isType(jetConstitutentsTypes,5)")
 
 
@@ -1102,12 +1036,16 @@ class Analysis():
         df = df.Define("pfcand_trackNdof",     "AlephSelection::get_constituent_trackNdof(jetc, TracksByRP)")
         df = df.Define("pfcand_trackChi2Norm", "AlephSelection::get_constituent_trackChi2Norm(jetc, TracksByRP)")
 
+        # original-Tracks index of each constituent's own track (-1 = no track):
+        # the join key between pfcand_* and the finders' *_origIdx branches
+        df = df.Define("pfcand_trackIdx", "AlephSelection::get_constituent_trackIdx(jetc, _RecoParticles_tracks.index)")
+
         # subdetector hit counts per constituent (inside-out: VDET, ITC, TPC)
         df = df.Define("pfcand_nTrackHits_VDET", "AlephSelection::get_constituent_nTrackHits_VDET(jetc, TracksByRP, _Tracks_subdetectorHitNumbers)")
         df = df.Define("pfcand_nTrackHits_ITC",  "AlephSelection::get_constituent_nTrackHits_ITC(jetc, TracksByRP, _Tracks_subdetectorHitNumbers)")
         df = df.Define("pfcand_nTrackHits_TPC",  "AlephSelection::get_constituent_nTrackHits_TPC(jetc, TracksByRP, _Tracks_subdetectorHitNumbers)")
 
-        df = df.Define("Bz", '1.5') # luka reads this from the event ? 
+        df = df.Define("Bz", f"{BZ}")
 
         ############################################# Track Parameters and Covariance #######################################################
 
@@ -1259,50 +1197,32 @@ class Analysis():
 
     def output(self):
 
-        truth_branches = []
+        module_branches = []
         if self.do_truth:
-            truth_branches = [
-                "truev0_pdg", "truev0_p", "truev0_costheta",
-                "truev0_px", "truev0_py", "truev0_pz",
-                "truev0_fd", "truev0_dpv",
-                "truev0_nmatched", "truev0_nsec", "truev0_found_any", "truev0_found_correct",
-                "truev0_x", "truev0_y", "truev0_z",
-                "v0c_class", "v0c_trueidx", "v0c_pairmult", "v0c_trackshared",
-                "v0c_alpha", "v0c_qt", "v0c_trk1", "v0c_trk2",
-                "v0c_pdg", "v0c_invM", "v0c_dxyz", "v0c_p", "v0c_cosPointing",
-                "v0c_vx", "v0c_vy", "v0c_vz",
+            module_branches = [
+                f"truev0_{b}" for b, _ in TRUEV0_DEFINES
+            ] + [
+                f"v0c_{b}" for b, _ in V0C_DEFINES
             ]
         if self.do_v0new:
-            truth_branches += [
-                "n_v0n_event", "v0n_pdg", "v0n_invM", "v0n_alpha", "v0n_qt",
-                "v0n_chi2", "v0n_dxyz", "v0n_p", "v0n_px", "v0n_py", "v0n_pz",
-                "v0n_cosPointing", "v0n_pointSig",
-                "v0n_tight", "v0n_bandSig", "v0n_massSig", "v0n_vx", "v0n_vy", "v0n_vz",
-                # vertex-fit covariance + truth-free per-daughter joins/dE/dx
-                "v0n_cov_xx", "v0n_cov_yx", "v0n_cov_yy",
-                "v0n_cov_zx", "v0n_cov_zy", "v0n_cov_zz",
-                "v0n_trk1_origIdx", "v0n_trk2_origIdx",
-                "v0n_trk1_dEdx_pads_value", "v0n_trk1_dEdx_pads_error",
-                "v0n_trk1_dEdx_wires_value", "v0n_trk1_dEdx_wires_error",
-                "v0n_trk2_dEdx_pads_value", "v0n_trk2_dEdx_pads_error",
-                "v0n_trk2_dEdx_wires_value", "v0n_trk2_dEdx_wires_error",
+            module_branches += ["n_v0n_event"] + [
+                f"v0n_{b}" for b, _ in V0N_CAND_DEFINES
+            ] + [
+                f"v0n_{t}_origIdx" for t in V0N_TRKS
+            ] + [
+                f"v0n_{t}_{b}" for t in V0N_TRKS
+                for b in DEDX_BRANCHES + LEG_PID_BRANCHES
+            ] + [
                 # per-jet new-module V0s (mirror of the old v0_* block) -> jet-level apples-to-apples
                 "n_v0njet_jets", "n_v0njet_ks", "n_v0njet_lambda",
-                "v0njet_pdg", "v0njet_invM", "v0njet_chi2", "v0njet_chi2_norm",
-                "v0njet_ndof", "v0njet_ntracks", "v0njet_p", "v0njet_prel",
-                "v0njet_thetarel", "v0njet_phirel", "v0njet_dxy", "v0njet_dxyz",
-                "v0njet_cosPointing", "v0njet_correctedMass",
-                "v0njet_dx", "v0njet_dy", "v0njet_dz",
+            ] + [
+                f"v0njet_{b}" for b, _ in V0NJET_DEFINES
             ]
             if self.do_truth:
-                truth_branches += [
-                    "v0n_class", "v0n_trueidx", "v0n_pairmult", "v0n_trackshared",
-                    "v0n_trk1", "v0n_trk2",
-                    "truev0_foundnew_any", "truev0_foundnew_correct",
-                ]
+                module_branches += [n for n, _ in V0N_TRUTH_DEFINES]
         if self.do_svnew:
             for pfx in ("svn", "svm"):
-                truth_branches += [
+                module_branches += [
                     f"n_{pfx}_event", f"{pfx}_mass", f"{pfx}_chi2", f"{pfx}_dxyz",
                     f"{pfx}_p", f"{pfx}_cosPointing", f"{pfx}_pointSig",
                     f"{pfx}_ntracks", f"{pfx}_sigL", f"{pfx}_trk_sv", f"{pfx}_trk_idx",
@@ -1312,49 +1232,36 @@ class Analysis():
                     f"{pfx}_cov_zx", f"{pfx}_cov_zy", f"{pfx}_cov_zz",
                 ]
             # V0 -> nearest-svn pointing feature
-            truth_branches += ["v0n_svnCosPoint", "v0n_svnPointSig", "v0n_svnIdx"]
+            module_branches += ["v0n_svnCosPoint", "v0n_svnPointSig", "v0n_svnIdx"]
             # (sec2origIdx lives in the always-written list — it is truth-free)
         if self.do_pvnew:
             # the flag surface of the standalone PV fitter
-            truth_branches += ["pv_converged", "pv_split_converged", "pv_trivial",
+            module_branches += ["pv_converged", "pv_split_converged", "pv_trivial",
                                "pv_good"]
-        if self.ana_args.phiKK:
-            truth_branches += ["n_phikk_event"] + [
-                f"phikk_{b}" for b in (
-                    "invM", "p", "px", "py", "pz", "alpha", "qt", "bandEll",
-                    "chi2", "vx", "vy", "vz", "dpv", "dpvSig", "same_sign",
-                    "wp", "tight")
+        if self.do_phikk:
+            module_branches += ["n_phikk_event"] + [
+                f"phikk_{b}" for b in PHIKK_CAND_BRANCHES
             ] + [
-                f"phikk_{t}_{b}" for t in ("trk1", "trk2")
-                for b in ("origIdx", "q", "p", "costheta", "d0", "z0", "sigd0",
-                          "nvdet", "nitc", "chi2ndf", "isprim",
-                          "dEdx_pads_value", "dEdx_pads_error",
-                          "dEdx_wires_value", "dEdx_wires_error")
+                f"phikk_{t}_{b}" for t in PHIKK_TRKS
+                for b in PHIKK_TRK_BRANCHES + DEDX_BRANCHES + LEG_PID_BRANCHES
             ]
             if self.do_truth:
-                truth_branches += ["n_truephi_event", "truephi_found"] + [
-                    f"truephi_{b}" for b in (
-                        "mothPdg", "origin", "p", "pt", "costheta",
-                        "px", "py", "pz", "vx", "vy", "vz", "nmatched",
-                        "dauPlus_p", "dauMinus_p")
+                module_branches += ["n_truephi_event", "truephi_found"] + [
+                    f"truephi_{b}" for b in TRUEPHI_BRANCHES
                 ] + ["phikk_class", "phikk_trueidx"] + [
-                    f"phikk_{t}_{b}" for t in ("trk1", "trk2")
-                    for b in ("mcpdg", "mothpdg")
+                    f"phikk_{t}_{b}" for t in PHIKK_TRKS for b in TRK_TRUTH_BRANCHES
                 ]
-        if self.ana_args.dstar:
-            truth_branches += ["n_d0_event", "n_dstar_event", "n_d0fits_event"] + [
+        if self.do_dstar:
+            module_branches += ["n_d0_event", "n_dstar_event", "n_d0fits_event"] + [
                 f"d0_{b}" for b in D0_CAND_BRANCHES
             ] + [
                 f"dstar_{b}" for b in DSTAR_CAND_BRANCHES
             ] + [
-                f"{pfx}_{b}"
-                for pfx in ("d0_trkK", "d0_trkPi", "dstar_trkK", "dstar_trkPi", "dstar_trkPis")
-                for b in DSTAR_TRK_BRANCHES + (
-                    "dEdx_pads_value", "dEdx_pads_error",
-                    "dEdx_wires_value", "dEdx_wires_error")
+                f"{pfx}_{b}" for pfx, _ in DSTAR_TRK_LEGS
+                for b in DSTAR_TRK_BRANCHES + DEDX_BRANCHES + LEG_PID_BRANCHES
             ]
             if self.do_truth:
-                truth_branches += ["n_trued0_event", "n_truedstar_event",
+                module_branches += ["n_trued0_event", "n_truedstar_event",
                                    "trued0_found_loose", "trued0_found_tight",
                                    "truedstar_found_loose", "truedstar_found_tight",
                                    "d0_class", "d0_trueidx",
@@ -1363,13 +1270,12 @@ class Analysis():
                 ] + [
                     f"truedstar_{b}" for b in TRUEDSTAR_BRANCHES
                 ] + [
-                    f"d0_{t}_{b}" for t in ("trkK", "trkPi") for b in ("mcpdg", "mothpdg")
+                    f"d0_{t}_{b}" for t in D0_TRKS for b in TRK_TRUTH_BRANCHES
                 ] + [
-                    f"dstar_{t}_{b}" for t in ("trkK", "trkPi", "trkPis")
-                    for b in ("mcpdg", "mothpdg")
+                    f"dstar_{t}_{b}" for t in DSTAR_TRKS for b in TRK_TRUTH_BRANCHES
                 ]
 
-        return truth_branches + [
+        return module_branches + [
             #DEBUG
             "pfcand_dEdx_len", "pfcand_E_len", "pfcand_pval_ele_len",
 
@@ -1406,6 +1312,10 @@ class Analysis():
             "recopart_tracks_index",
             "recopart_tracks_begin",
             "recopart_tracks_end",
+            "pfcand_trackIdx",
+            # per-original-track membership bitmask + stored-candidate multiplicity
+            "trk_member",
+            "trk_nCand",
 
             # gen level vertex & resolutions
             "gen_vertex_x",

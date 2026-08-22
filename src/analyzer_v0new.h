@@ -14,6 +14,8 @@
 #include <ROOT/RVec.hxx>
 #include "TVector3.h"
 
+#include "aleph_units.h"
+#include "analyzer_trkaux.h"
 #include "dedx_valid.h"
 #include "edm4hep/TrackState.h"
 #include "FCCAnalyses/VertexingUtils.h"
@@ -23,11 +25,13 @@ namespace FCCAnalyses {
 namespace AlephV0New {
 
 using ROOT::VecOps::RVec;
+using AlephTrkAux::apVars;
+using AlephTrkAux::fitTracksCm;
 
-const double m_pi_ = 0.13957039;
-const double m_p_  = 0.93827208;
-const double MKS   = 0.497611;
-const double MLAM  = 1.115683;
+constexpr double m_pi_ = AlephMasses::kPiCh;
+constexpr double m_p_  = AlephMasses::kProton;
+constexpr double MKS   = AlephMasses::kKs;
+constexpr double MLAM  = AlephMasses::kLambda;
 
 // ---------------------------------------------------------------------------
 // Cut package: single named source. TIGHT = adopted package (findV0s defaults;
@@ -55,9 +59,6 @@ constexpr double LOOSE_LAM_BAND_LO = 0.20, LOOSE_LAM_BAND_HI = 0.40;
 // |ell-1| / thr(p) below this fraction of the ramp half-width (see
 // lamBandThrLoose).
 constexpr double LOOSE_LAM_BAND_FRAC = 0.8;
-// widened loose Lambda band for the tail-measurement variant (2x nominal)
-constexpr double WIDE_LAM_BAND_LO = 2. * LOOSE_LAM_BAND_LO,
-                 WIDE_LAM_BAND_HI = 2. * LOOSE_LAM_BAND_HI;
 constexpr double LAM_P_LO = 8., LAM_P_HI = 20.;
 // Lambda AP-band ellipse resolution sigma_ell(p), quadrature model;
 // "nsig" is in units of this 68% width.
@@ -86,6 +87,7 @@ inline double lamPointThr(double pmag, double lowp = TIGHT_COS_LAM_LOWP,
   return (pmag < 2.) ? lowp : (pmag < 4.) ? midp : highp;
 }
 inline double ksBandEll(double alpha, double qt, double pmag) {
+  // frozen tuned values of the Ks AP band; do not re-derive
   const double PSTAR_K = 0.20582, ESTAR_K = 0.248806;
   double beta = pmag / std::sqrt(pmag * pmag + MKS * MKS);
   double amax = PSTAR_K / (beta * ESTAR_K);
@@ -100,6 +102,7 @@ inline double ksBandThr(double pmag, double floor_, double nsig_lo, double nsig_
   return std::max(floor_, nsig * sigmaEllKs(pmag));
 }
 inline double lamBandEll(double alpha, double qt, double pmag) {
+  // frozen tuned values of the Lambda AP band; do not re-derive
   const double PSTAR_L = 0.1005, ALPHA0_L = 0.69157;
   double beta = pmag / std::sqrt(pmag * pmag + MLAM * MLAM);
   double amp = 2. * PSTAR_L / (beta * MLAM);
@@ -160,22 +163,7 @@ inline double invMass(const TVector3& p1, double m1, const TVector3& p2, double 
 inline VertexingUtils::FCCAnalysesV0 findV0s(
     const RVec<edm4hep::TrackState>& np_tracks,
     const VertexingUtils::FCCAnalysesVertex& PV,
-    double solenoidBz = 1.5,
-    double cos_point_ks = TIGHT_COS_KS_HIGHP,          // Ks pointing, p>=4 GeV tier; first cut arg, so the --v0nKsPointing override passes ONLY this value
-    double ks_m_lo = KS_M_LO, double ks_m_hi = KS_M_HI,        // Ks mass window [GeV] (sidebands kept; common to both tiers)
-    double lam_m_lo = LAM_M_LO, double lam_m_hi = LAM_M_HI,    // Lambda mass window [GeV] (common to both tiers)
-    double dis_lo = DIS_LO, double dis_hi = DIS_HI,            // displacement window [cm] (common)
-    double cos_point_lam = TIGHT_COS_LAM_LOWP,         // tight Lambda pointing, p<2 GeV tier (the tiers above use TIGHT_COS_LAM_MIDP/HIGHP via lamPointThr)
-    double qt_min_lam = TIGHT_QT_MIN_LAM,              // tight Armenteros qT conversion veto, Lambda hyp [GeV]
-    double cos_ks_lowp = TIGHT_COS_KS_LOWP,            // tight Ks pointing, p<2 GeV tier
-    double cos_ks_midp = TIGHT_COS_KS_MIDP,            // tight Ks pointing, 2<=p<4 GeV tier
-    double ap_band_ks = AP_BAND_KS,                    // Ks exact-locus AP band |ell-1| floor (<=0 disables the band in BOTH tiers)
-    double ap_lam_lo = AP_LAM_LO, double ap_lam_hi = AP_LAM_HI, // tight Lambda band: lo = floor of the capped thr (lamBandThrTight; <=0 off); hi not read by the tight path
-    double chi2_cut = CHI2_CUT,                        // vertex chi2 (ndf=1, common)
-    double trk_chi2_cut = -1.,                         // per-track chi2 (<=0 off, common)
-    bool lam_point_ks_tiers = false,                   // sizing variant: tight Lambda pointing uses the Ks p-tiers; candTight still encodes the ADOPTED package
-    double loose_lam_lo = LOOSE_LAM_BAND_LO,           // LOOSE Lambda AP band ramp edges; the stored acceptance is
-    double loose_lam_hi = LOOSE_LAM_BAND_HI) {         // LOOSE_LAM_BAND_FRAC x this ramp, floored at the tight band (lamBandThrLoose)
+    double solenoidBz) {
 
   VertexingUtils::FCCAnalysesV0 result;
   const int nTr = np_tracks.size();
@@ -200,25 +188,16 @@ inline VertexingUtils::FCCAnalysesV0 findV0s(
       if (np_tracks[i].omega * np_tracks[j].omega > 0) continue; // same charge
       tr_pair[1] = np_tracks[j];
 
-      // single consistent fit; alltracks passed so reco_ind is filled
-      auto v = VertexFitterSimple::VertexFitter_Tk(
-          0, tr_pair, np_tracks, false, 0., 0., 0., 0., 0., 0., solenoidBz, false);
+      auto v = fitTracksCm(tr_pair, np_tracks, solenoidBz);
       if (v.updated_track_momentum_at_vertex.size() != 2) continue;
-      // cm-as-mm homothety: single-fit momentum magnitudes are 10x too small
-      // (Bz/2 already applied inside the fitter); rescale ONCE at the source so
-      // masses, p, qt and every downstream branch are consistent
-      for (auto& tp : v.updated_track_momentum_at_vertex) tp *= 10.;
       double chi2 = v.vertex.chi2; // normalised, ndf=1
-      if (chi2 >= chi2_cut || !(chi2 == chi2)) continue;
-      if (trk_chi2_cut > 0 && v.reco_chi2.size() == 2 &&
-          (v.reco_chi2[0] > trk_chi2_cut || v.reco_chi2[1] > trk_chi2_cut))
-        continue;
+      if (chi2 >= CHI2_CUT || !(chi2 == chi2)) continue;
 
       // displacement window (cm) + pointing
       TVector3 x(v.vertex.position[0], v.vertex.position[1], v.vertex.position[2]);
       TVector3 d = x - pv;
       double dis = d.Mag();
-      if (dis < dis_lo || dis > dis_hi) continue;
+      if (dis < DIS_LO || dis > DIS_HI) continue;
 
       TVector3 p1, p2;
       pairMomenta(v, p1, p2);
@@ -226,13 +205,11 @@ inline VertexingUtils::FCCAnalysesV0 findV0s(
       double pmag = p.Mag();
       if (pmag <= 0) continue;
       double cp = d.Dot(p) / (dis * pmag);
-      double qt = p1.Cross(p.Unit()).Mag(); // Armenteros qT (same for either daughter)
-      // Armenteros alpha: physical charge = +sign(omega) for the flipD0_copy'ed
-      // collection (raw ALEPH omega carries -charge, the flip restores +charge)
-      double la = p1.Dot(p) / pmag, lb = p2.Dot(p) / pmag;
+      // physical charge = +sign(omega) for the flipD0_copy'ed collection (raw
+      // ALEPH omega carries -charge, the flip restores +charge)
       double q1 = (np_tracks[i].omega > 0) ? 1. : -1.;
-      double lplus = (q1 > 0) ? la : lb, lminus = (q1 > 0) ? lb : la;
-      double alpha = (lplus + lminus != 0.) ? (lplus - lminus) / (lplus + lminus) : 0.;
+      double alpha, qt;
+      apVars(p1, p2, q1, alpha, qt);
 
       // hypothesis masses: Ks(pipi), Lambda(p pi) with proton = higher-|p| track
       // (in a Lambda decay the baryon carries most of the momentum)
@@ -243,35 +220,34 @@ inline VertexingUtils::FCCAnalysesV0 findV0s(
       // TIGHT (adopted) package first; arbitration among the tight-passing
       // hypotheses only, so the tight subset is EXACTLY what the module would
       // output with the loose tier switched off.
-      bool inWinKs = (mks > ks_m_lo && mks < ks_m_hi);
-      bool inWinLam = (mlam > lam_m_lo && mlam < lam_m_hi);
-      bool okKs = inWinKs && cp > ksPointThr(pmag, cos_ks_lowp, cos_ks_midp, cos_point_ks);
-      if (okKs && ap_band_ks > 0)
+      bool inWinKs = (mks > KS_M_LO && mks < KS_M_HI);
+      bool inWinLam = (mlam > LAM_M_LO && mlam < LAM_M_HI);
+      bool okKs = inWinKs && cp > ksPointThr(pmag, TIGHT_COS_KS_LOWP,
+                                             TIGHT_COS_KS_MIDP, TIGHT_COS_KS_HIGHP);
+      if (okKs)
         okKs = std::abs(ksBandEll(alpha, qt, pmag) - 1.) <
-               ksBandThr(pmag, ap_band_ks, TIGHT_NSIG_KS_LOWP, TIGHT_NSIG_KS_HIGHP);
-      double cos_lam_thr = lam_point_ks_tiers
-          ? ksPointThr(pmag, cos_ks_lowp, cos_ks_midp, cos_point_ks)
-          : lamPointThr(pmag, cos_point_lam);
-      bool okLam = inWinLam && cp > cos_lam_thr && qt > qt_min_lam;
-      if (okLam && ap_lam_lo > 0)
+               ksBandThr(pmag, AP_BAND_KS, TIGHT_NSIG_KS_LOWP, TIGHT_NSIG_KS_HIGHP);
+      bool okLam = inWinLam && cp > lamPointThr(pmag, TIGHT_COS_LAM_LOWP) &&
+                   qt > TIGHT_QT_MIN_LAM;
+      if (okLam)
         okLam = std::abs(lamBandEll(alpha, qt, pmag) - 1.) <
-                lamBandThrTight(pmag, ap_lam_lo);
+                lamBandThrTight(pmag, AP_LAM_LO);
       bool tight = okKs || okLam;
       if (!tight) {
         // LOOSE training tier: flat pointing, widened AP bands, relaxed
         // Lambda qT veto; windows/chi2/displacement common.
         okKs = inWinKs && cp > LOOSE_COS_POINT;
-        if (okKs && ap_band_ks > 0)
+        if (okKs)
           okKs = std::abs(ksBandEll(alpha, qt, pmag) - 1.) <
-                 ksBandThr(pmag, ap_band_ks, LOOSE_NSIG_KS, LOOSE_NSIG_KS);
+                 ksBandThr(pmag, AP_BAND_KS, LOOSE_NSIG_KS, LOOSE_NSIG_KS);
         okLam = inWinLam && cp > LOOSE_COS_POINT && qt > LOOSE_QT_MIN_LAM;
-        if (okLam && ap_lam_lo > 0)
+        if (okLam)
           okLam = std::abs(lamBandEll(alpha, qt, pmag) - 1.) <
-                  lamBandThrLoose(pmag, loose_lam_lo, loose_lam_hi, ap_lam_lo);
+                  lamBandThrLoose(pmag, LOOSE_LAM_BAND_LO, LOOSE_LAM_BAND_HI, AP_LAM_LO);
         if (!okKs && !okLam) continue;
       }
-      double dks = std::abs(mks - MKS) / (0.5 * (ks_m_hi - ks_m_lo));
-      double dlam = std::abs(mlam - MLAM) / (0.5 * (lam_m_hi - lam_m_lo));
+      double dks = std::abs(mks - MKS) / (0.5 * (KS_M_HI - KS_M_LO));
+      double dlam = std::abs(mlam - MLAM) / (0.5 * (LAM_M_HI - LAM_M_LO));
       int pdg; double m;
       if (okKs && (!okLam || dks <= dlam)) { pdg = 310; m = mks; }
       else                                  { pdg = 3122; m = mlam; }
@@ -303,40 +279,6 @@ inline VertexingUtils::FCCAnalysesV0 findV0s(
 }
 
 // ---------------------------------------------------------------------------
-// Sizing variant: adopted findV0s defaults except that the tight-tier Lambda
-// pointing follows the Ks p-tiers. NOT for standard productions; the v0n_tight
-// branch in its output still encodes the ADOPTED package, not variant-tier
-// membership (re-derive variant-tight offline from kinematics).
-// ---------------------------------------------------------------------------
-inline VertexingUtils::FCCAnalysesV0 findV0sLamKsPointing(
-    const RVec<edm4hep::TrackState>& np_tracks,
-    const VertexingUtils::FCCAnalysesVertex& PV,
-    double solenoidBz = 1.5) {
-  return findV0s(np_tracks, PV, solenoidBz, TIGHT_COS_KS_HIGHP, KS_M_LO, KS_M_HI,
-                 LAM_M_LO, LAM_M_HI, DIS_LO, DIS_HI, TIGHT_COS_LAM_LOWP,
-                 TIGHT_QT_MIN_LAM, TIGHT_COS_KS_LOWP, TIGHT_COS_KS_MIDP,
-                 AP_BAND_KS, AP_LAM_LO, AP_LAM_HI, CHI2_CUT, -1.,
-                 /*lam_point_ks_tiers=*/true);
-}
-
-// ---------------------------------------------------------------------------
-// Tail-measurement variant: adopted defaults except the LOOSE Lambda AP band
-// ramp edges doubled (stored acceptance = LOOSE_LAM_BAND_FRAC x the ramp). NOT
-// for standard productions; v0n_tight still encodes the adopted tight package.
-// ---------------------------------------------------------------------------
-inline VertexingUtils::FCCAnalysesV0 findV0sWideLamLoose(
-    const RVec<edm4hep::TrackState>& np_tracks,
-    const VertexingUtils::FCCAnalysesVertex& PV,
-    double solenoidBz = 1.5) {
-  return findV0s(np_tracks, PV, solenoidBz, TIGHT_COS_KS_HIGHP, KS_M_LO, KS_M_HI,
-                 LAM_M_LO, LAM_M_HI, DIS_LO, DIS_HI, TIGHT_COS_LAM_LOWP,
-                 TIGHT_QT_MIN_LAM, TIGHT_COS_KS_LOWP, TIGHT_COS_KS_MIDP,
-                 AP_BAND_KS, AP_LAM_LO, AP_LAM_HI, CHI2_CUT, -1.,
-                 /*lam_point_ks_tiers=*/false,
-                 WIDE_LAM_BAND_LO, WIDE_LAM_BAND_HI);
-}
-
-// ---------------------------------------------------------------------------
 // Truth-free per-candidate diagnostics (work on data; reco_ind is filled by
 // this module, momenta are already at the true GeV scale).
 // ---------------------------------------------------------------------------
@@ -350,13 +292,11 @@ inline RVec<float> candAlpha(const VertexingUtils::FCCAnalysesV0& v0s,
       out.push_back(-99.);
       continue;
     }
-    TVector3 pa = v.updated_track_momentum_at_vertex[0];
-    TVector3 pb = v.updated_track_momentum_at_vertex[1];
-    TVector3 p = pa + pb;
-    double la = pa.Dot(p) / p.Mag(), lb = pb.Dot(p) / p.Mag();
     double q1 = (secondaries[v.reco_ind[0]].omega > 0) ? 1. : -1.;
-    double lp = (q1 > 0) ? la : lb, lm = (q1 > 0) ? lb : la;
-    out.push_back((lp + lm != 0.) ? (lp - lm) / (lp + lm) : -99.);
+    double alpha, qt;
+    apVars(v.updated_track_momentum_at_vertex[0],
+           v.updated_track_momentum_at_vertex[1], q1, alpha, qt, -99.);
+    out.push_back(alpha);
   }
   return out;
 }
@@ -385,11 +325,9 @@ inline RVec<int> candTight(const VertexingUtils::FCCAnalysesV0& v0s,
     double dis = d.Mag();
     if (pmag <= 0 || dis <= 0) { out.push_back(0); continue; }
     double cp = d.Dot(p) / (dis * pmag);
-    double qt = p1.Cross(p.Unit()).Mag();
-    double la = p1.Dot(p) / pmag, lb = p2.Dot(p) / pmag;
     double q1 = (secondaries[v.reco_ind[0]].omega > 0) ? 1. : -1.;
-    double lplus = (q1 > 0) ? la : lb, lminus = (q1 > 0) ? lb : la;
-    double alpha = (lplus + lminus != 0.) ? (lplus - lminus) / (lplus + lminus) : 0.;
+    double alpha, qt;
+    apVars(p1, p2, q1, alpha, qt);
     double m = v0s.invM[c];
     bool ok;
     if (v0s.pdgAbs[c] == 310) {
@@ -427,11 +365,9 @@ inline RVec<float> candBandSig(const VertexingUtils::FCCAnalysesV0& v0s,
     TVector3 p = p1 + p2;
     double pmag = p.Mag();
     if (pmag <= 0) { out.push_back(-999.); continue; }
-    double qt = p1.Cross(p.Unit()).Mag();
-    double la = p1.Dot(p) / pmag, lb = p2.Dot(p) / pmag;
     double q1 = (secondaries[v.reco_ind[0]].omega > 0) ? 1. : -1.;
-    double lplus = (q1 > 0) ? la : lb, lminus = (q1 > 0) ? lb : la;
-    double alpha = (lplus + lminus != 0.) ? (lplus - lminus) / (lplus + lminus) : 0.;
+    double alpha, qt;
+    apVars(p1, p2, q1, alpha, qt);
     if (v0s.pdgAbs[c] == 310)
       out.push_back((ksBandEll(alpha, qt, pmag) - 1.) / sigmaEllKs(pmag));
     else
@@ -473,10 +409,8 @@ inline float pointSigTransverse(const TVector3& d, const TVector3& p,
   TVector3 ph = p.Unit();
   TVector3 u1 = ph.Orthogonal().Unit();
   TVector3 u2 = ph.Cross(u1);
-  double C[3][3] = {
-    {double(cV[0]) + cR[0], double(cV[1]) + cR[1], double(cV[3]) + cR[3]},
-    {double(cV[1]) + cR[1], double(cV[2]) + cR[2], double(cV[4]) + cR[4]},
-    {double(cV[3]) + cR[3], double(cV[4]) + cR[4], double(cV[5]) + cR[5]}};
+  double C[3][3];
+  AlephTrkAux::sumCovPacked(cV, cR, C);
   auto quad = [&](const TVector3& a, const TVector3& b) {
     double s = 0.;
     double av[3] = {a.X(), a.Y(), a.Z()}, bv[3] = {b.X(), b.Y(), b.Z()};
@@ -613,36 +547,41 @@ inline V0SVPointing candSVPointing(const VertexingUtils::FCCAnalysesV0& v0s,
   return out;
 }
 
-// Per-track measurement lookup by ORIGINAL track index; sentinel -1 when there
-// is no measurement or it is invalid (gate == omega of the track = the
-// failed-leg sentinel, or non-finite/non-positive value or error). gate/gateErr
-// = dQdx.value/error; trackStates = trackState collection, parallel to Tracks.
+// Measurement index of every original track index, or -1: the dE/dx join built
+// ONCE per collection per event, in place of a scan per requested track. A
+// track measured twice keeps the first measurement, as the scan did.
+// An entry is -1 when the measurement fails the shared validity gate (value ==
+// omega of the track = the failed-leg sentinel, or non-finite/non-positive
+// value or error), so value and error branches share one lookup.
+inline RVec<int> dedxIndexByTrack(const RVec<float>& value,
+                                  const RVec<float>& error,
+                                  const RVec<int>& meas_track_idx,
+                                  const RVec<edm4hep::TrackState>& trackStates) {
+  RVec<int> out(trackStates.size(), -1);
+  std::vector<char> seen(out.size(), 0);
+  const size_t nm = std::min({value.size(), error.size(),
+                              meas_track_idx.size()});
+  for (size_t j = 0; j < nm; ++j) {
+    const int t = meas_track_idx[j];
+    if (t < 0 || t >= (int)out.size() || seen[t]) continue;
+    seen[t] = 1;
+    if (AlephDedx::dEdxValid(value[j], error[j], trackStates[t].omega))
+      out[t] = (int)j;
+  }
+  return out;
+}
+
+// Per-track quantity by ORIGINAL track index through that join; -1 when the
+// track has no valid measurement.
 inline RVec<float> trackQuantityByIndex(const RVec<int>& want,
                                         const RVec<float>& values,
-                                        const RVec<float>& gate,
-                                        const RVec<float>& gateErr,
-                                        const RVec<int>& meas_track_idx,
-                                        const RVec<edm4hep::TrackState>& trackStates) {
+                                        const RVec<int>& meas_of_track) {
   RVec<float> out;
-  const size_t nm = std::min({values.size(), gate.size(), gateErr.size(),
-                              meas_track_idx.size()});
   for (int w : want) {
     float val = -1.f;
-    if (w >= 0) {
-      for (size_t j = 0; j < nm; ++j) {
-        if (meas_track_idx[j] == w) {
-          const float g = gate[j];
-          const float ge = gateErr[j];
-          const float omega_sentinel =
-              (meas_track_idx[j] >= 0 &&
-               meas_track_idx[j] < static_cast<int>(trackStates.size()))
-                  ? trackStates[meas_track_idx[j]].omega
-                  : g; // unknown track: treat as invalid
-          if (AlephDedx::dEdxValid(g, ge, omega_sentinel))
-            val = values[j];
-          break;
-        }
-      }
+    if (w >= 0 && w < (int)meas_of_track.size()) {
+      const int j = meas_of_track[w];
+      if (j >= 0 && j < (int)values.size()) val = values[j];
     }
     out.push_back(val);
   }
