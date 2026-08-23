@@ -147,7 +147,7 @@ inline RVec<int> flagInSet(const RVec<int>& orig_idx, const RVec<int>& set_orig)
 }
 
 // Original-Tracks indices of the daughters of the selected V0 candidates
-// (select with the tight flag). Only consumed by the OPT-IN pairing veto.
+// (select with the tight flag); consumed by the pairing veto of the later finders.
 inline RVec<int> claimedOrigIdx(const RVec<int>& d1, const RVec<int>& d2,
                                 const RVec<int>& keep) {
   RVec<int> out;
@@ -420,25 +420,36 @@ inline int ancestorFlavour(const std::vector<int>& moth,
   return orig;
 }
 
-// first linked MC particle of an original-Tracks index, -1 when unlinked
-inline int firstMCOfTrack(const RVec<RVec<int>>& trackToMCs, int trk, int nmc) {
-  if (trk < 0 || trk >= (int)trackToMCs.size() || trackToMCs[trk].empty()) return -1;
-  int m = trackToMCs[trk][0];
-  return (m >= 0 && m < nmc) ? m : -1;
+// MC particles linked to an original-Tracks index, all links: the relation
+// carries several unweighted partners for some tracks, in no particular order.
+inline RVec<int> mcLinksOfTrack(const RVec<RVec<int>>& trackToMCs, int trk, int nmc) {
+  RVec<int> out;
+  if (trk < 0 || trk >= (int)trackToMCs.size()) return out;
+  for (int m : trackToMCs[trk])
+    if (m >= 0 && m < nmc) out.push_back(m);
+  return out;
 }
 
-// Truth of one candidate leg: appends the linked MC particle's PDG and its LUND
-// mother's PDG (0 when absent), and reports both indices back to the caller.
-inline void pushLegTruth(const RVec<RVec<int>>& trackToMCs,
-                         const RVec<edm4hep::MCParticleData>& mc, int trk,
-                         RVec<int>& mcpdg, RVec<int>& mothpdg,
-                         int& m, int& mo) {
+// Truth of one candidate leg: appends the PDG of MC particle `m` (first link
+// by default; callers overwrite with the link that matched a true decay) and
+// of its LUND mother (0 when absent).
+inline void pushLegTruth(const RVec<edm4hep::MCParticleData>& mc, int m,
+                         RVec<int>& mcpdg, RVec<int>& mothpdg) {
   const int n = mc.size();
-  m = firstMCOfTrack(trackToMCs, trk, n);
-  mo = (m >= 0) ? lundMotherIdx(mc[m].generatorStatus) : -1;
-  mcpdg.push_back((m >= 0) ? mc[m].PDG : 0);
+  const int mo = (m >= 0 && m < n) ? lundMotherIdx(mc[m].generatorStatus) : -1;
+  mcpdg.push_back((m >= 0 && m < n) ? mc[m].PDG : 0);
   mothpdg.push_back((mo >= 0 && mo < n) ? mc[mo].PDG : 0);
 }
+// Replaces the entry just pushed for the current leg with MC particle `m`;
+// call at most once per leg, after pushLegTruth.
+inline void setLegTruth(const RVec<edm4hep::MCParticleData>& mc, int m,
+                        RVec<int>& mcpdg, RVec<int>& mothpdg) {
+  mcpdg.pop_back(); mothpdg.pop_back();
+  pushLegTruth(mc, m, mcpdg, mothpdg);
+}
+
+// first link of a leg, -1 when unlinked
+inline int firstOr(const RVec<int>& links) { return links.empty() ? -1 : links[0]; }
 
 // 1 for each of the `n_true` true particles reconstructed by at least one
 // class-1 candidate carrying `flag` (a loose/tight label; an empty flag counts

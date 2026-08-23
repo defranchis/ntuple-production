@@ -41,6 +41,9 @@ using AlephTrkAux::lundMothers;
 using AlephTrkAux::lundChildren;
 using AlephTrkAux::ancestorFlavour;
 using AlephTrkAux::pushLegTruth;
+using AlephTrkAux::setLegTruth;
+using AlephTrkAux::mcLinksOfTrack;
+using AlephTrkAux::firstOr;
 using AlephTrkAux::foundFlags;
 
 constexpr double M_K     = AlephMasses::kK;     // charged kaon
@@ -638,23 +641,38 @@ struct D0Truth {
   RVec<int> trkK_mothpdg, trkPi_mothpdg; // PDG of its LUND mother (0 = none)
 };
 
+// First true (K, pi) pair in (iK, iPi) reached by any link of the two legs:
+// the direct assignment is tried before the swapped one for each true entry.
+// Returns the true index and the matched links.
+inline bool matchPair(const RVec<int>& iK, const RVec<int>& iPi,
+                      const RVec<int>& L1, const RVec<int>& L2,
+                      int& ti, int& m1, int& m2) {
+  for (size_t t = 0; t < iK.size(); ++t) {
+    for (int a : L1) for (int b : L2)
+      if (iK[t] == a && iPi[t] == b) { ti = (int)t; m1 = a; m2 = b; return true; }
+    for (int a : L1) for (int b : L2)
+      if (iK[t] == b && iPi[t] == a) { ti = (int)t; m1 = a; m2 = b; return true; }
+  }
+  return false;
+}
+
 inline D0Truth classifyD0(const D0Block& c,
                           const RVec<RVec<int>>& trackToMCs,
                           const RVec<edm4hep::MCParticleData>& mc,
                           const TrueD0s& td) {
   D0Truth out;
+  const int nmc = mc.size();
   for (size_t k = 0; k < c.kin.m_kpi.size(); ++k) {
-    int m1, m2, mo1, mo2;
-    pushLegTruth(trackToMCs, mc, c.trkK.origIdx[k],
-                 out.trkK_mcpdg, out.trkK_mothpdg, m1, mo1);
-    pushLegTruth(trackToMCs, mc, c.trkPi.origIdx[k],
-                 out.trkPi_mcpdg, out.trkPi_mothpdg, m2, mo2);
-    int cls = 0, ti = -1;
-    if (m1 >= 0 && m2 >= 0)
-      for (size_t t = 0; t < td.idx.size(); ++t) {
-        if (td.iK[t] == m1 && td.iPi[t] == m2) { cls = 1; ti = (int)t; break; }
-        if (td.iK[t] == m2 && td.iPi[t] == m1) { cls = 2; ti = (int)t; break; }
-      }
+    const RVec<int> L1 = mcLinksOfTrack(trackToMCs, c.trkK.origIdx[k], nmc);
+    const RVec<int> L2 = mcLinksOfTrack(trackToMCs, c.trkPi.origIdx[k], nmc);
+    pushLegTruth(mc, firstOr(L1), out.trkK_mcpdg, out.trkK_mothpdg);
+    pushLegTruth(mc, firstOr(L2), out.trkPi_mcpdg, out.trkPi_mothpdg);
+    int cls = 0, ti = -1, m1 = -1, m2 = -1;
+    if (matchPair(td.iK, td.iPi, L1, L2, ti, m1, m2)) {
+      cls = (td.iK[ti] == m1) ? 1 : 2;
+      setLegTruth(mc, m1, out.trkK_mcpdg, out.trkK_mothpdg);
+      setLegTruth(mc, m2, out.trkPi_mcpdg, out.trkPi_mothpdg);
+    }
     out.cls.push_back(cls);
     out.trueidx.push_back(ti);
   }
@@ -684,31 +702,43 @@ inline DstarTruth classifyDstar(const DstarBlock& c,
                                 const TrueDstars& tds,
                                 const TrueD0s& td0) {
   DstarTruth out;
+  const int nmc = mc.size();
   for (size_t k = 0; k < c.kin.m_kpi.size(); ++k) {
-    int m1, m2, m3, mo1, mo2, mo3;
-    pushLegTruth(trackToMCs, mc, c.trkK.origIdx[k],
-                 out.trkK_mcpdg, out.trkK_mothpdg, m1, mo1);
-    pushLegTruth(trackToMCs, mc, c.trkPi.origIdx[k],
-                 out.trkPi_mcpdg, out.trkPi_mothpdg, m2, mo2);
-    pushLegTruth(trackToMCs, mc, c.trkPis.origIdx[k],
-                 out.trkPis_mcpdg, out.trkPis_mothpdg, m3, mo3);
+    const RVec<int> L1 = mcLinksOfTrack(trackToMCs, c.trkK.origIdx[k], nmc);
+    const RVec<int> L2 = mcLinksOfTrack(trackToMCs, c.trkPi.origIdx[k], nmc);
+    const RVec<int> L3 = mcLinksOfTrack(trackToMCs, c.trkPis.origIdx[k], nmc);
+    pushLegTruth(mc, firstOr(L1), out.trkK_mcpdg, out.trkK_mothpdg);
+    pushLegTruth(mc, firstOr(L2), out.trkPi_mcpdg, out.trkPi_mothpdg);
+    pushLegTruth(mc, firstOr(L3), out.trkPis_mcpdg, out.trkPis_mothpdg);
 
-    int cls = 0, ti = -1;
+    int cls = 0, ti = -1, m1 = -1, m2 = -1;
     // true D* whose D0 daughters are this K,pi pair (either assignment)
-    int swapped = 0;
-    if (m1 >= 0 && m2 >= 0)
-      for (size_t t = 0; t < tds.idx.size(); ++t) {
-        if (tds.iK[t] == m1 && tds.iPi[t] == m2) { ti = (int)t; swapped = 0; break; }
-        if (tds.iK[t] == m2 && tds.iPi[t] == m1) { ti = (int)t; swapped = 1; break; }
-      }
-    if (ti >= 0) {
-      bool pis_ok = (m3 >= 0 && m3 == tds.iPis[ti]);
+    if (matchPair(tds.iK, tds.iPi, L1, L2, ti, m1, m2)) {
+      const bool swapped = (tds.iK[ti] != m1);
+      int m3 = -1;
+      for (int cnd : L3) if (cnd == tds.iPis[ti]) { m3 = cnd; break; }
+      const bool pis_ok = (m3 >= 0);
       if (!swapped) cls = pis_ok ? 1 : 3;
       else if (pis_ok) cls = 2;
-    } else if (m1 >= 0 && m2 >= 0) {
+      if (cls) {
+        setLegTruth(mc, m1, out.trkK_mcpdg, out.trkK_mothpdg);
+        setLegTruth(mc, m2, out.trkPi_mcpdg, out.trkPi_mothpdg);
+        if (pis_ok) setLegTruth(mc, m3, out.trkPis_mcpdg, out.trkPis_mothpdg);
+      }
+    } else {
       // no D* parent: a true D0 -> K pi with the correct assignment
-      for (size_t t = 0; t < td0.idx.size(); ++t)
-        if (td0.iK[t] == m1 && td0.iPi[t] == m2) { cls = 4; break; }
+      for (size_t t = 0; t < td0.idx.size() && cls == 0; ++t)
+        for (int a : L1) {
+          if (td0.iK[t] != a) continue;
+          for (int b : L2)
+            if (td0.iPi[t] == b) {
+              cls = 4;
+              setLegTruth(mc, a, out.trkK_mcpdg, out.trkK_mothpdg);
+              setLegTruth(mc, b, out.trkPi_mcpdg, out.trkPi_mothpdg);
+              break;
+            }
+          if (cls) break;
+        }
     }
     out.cls.push_back(cls);
     // a swapped K,pi pair whose slow pion is wrong stays class 0, so the

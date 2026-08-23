@@ -550,7 +550,7 @@ class Analysis():
         # chains read them from analyzer_pvnew.h, in cm.
         bs_sig_cm = "{0}::PVN_BS_SIGMA_X, {0}::PVN_BS_SIGMA_Y, {0}::PVN_BS_SIGMA_Z".format(PVNEW)
         chi2max = "{}::PVN_CHI2_MAX".format(PVNEW)
-        # the legacy fitter wants x,y in 10um and z in mm: cm x 1e3 for all three
+        # the legacy chain reads lengths in the raw Beamspot_* unit (10 um = 1e-3 cm): cm x 1e3 for all three
         bs_sig_legacy = "{0}::PVN_BS_SIGMA_X*1e3, {0}::PVN_BS_SIGMA_Y*1e3, {0}::PVN_BS_SIGMA_Z*1e3".format(PVNEW)
 
         if self.do_pvnew:

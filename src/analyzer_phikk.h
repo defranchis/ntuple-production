@@ -39,6 +39,10 @@ using AlephTrkAux::lundMothers;
 using AlephTrkAux::lundChildren;
 using AlephTrkAux::ancestorFlavour;
 using AlephTrkAux::pushLegTruth;
+using AlephTrkAux::setLegTruth;
+using AlephTrkAux::mcLinksOfTrack;
+using AlephTrkAux::firstOr;
+using AlephTrkAux::lundMotherIdx;
 using AlephTrkAux::foundFlags;
 
 constexpr double M_K   = AlephMasses::kK;    // charged kaon
@@ -307,18 +311,30 @@ inline PhiKKTruth classifyPhiKK(const PhiKKCands& c,
                                 const RVec<edm4hep::MCParticleData>& mc,
                                 const TruePhis& tp) {
   PhiKKTruth out;
+  const int nmc = mc.size();
   for (size_t k = 0; k < c.invM.size(); ++k) {
-    int m1, m2, mo1, mo2;
-    pushLegTruth(trackToMCs, mc, c.trk1.origIdx[k],
-                 out.trk1_mcpdg, out.trk1_mothpdg, m1, mo1);
-    pushLegTruth(trackToMCs, mc, c.trk2.origIdx[k],
-                 out.trk2_mcpdg, out.trk2_mothpdg, m2, mo2);
-    const int pdg1 = out.trk1_mcpdg.back(), pdg2 = out.trk2_mcpdg.back();
+    const RVec<int> L1 = mcLinksOfTrack(trackToMCs, c.trk1.origIdx[k], nmc);
+    const RVec<int> L2 = mcLinksOfTrack(trackToMCs, c.trk2.origIdx[k], nmc);
+    pushLegTruth(mc, firstOr(L1), out.trk1_mcpdg, out.trk1_mothpdg);
+    pushLegTruth(mc, firstOr(L2), out.trk2_mcpdg, out.trk2_mothpdg);
+    // any pair of links forming K+K- from the same LUND mother in the true list
     int ti = -1;
-    if (std::abs(pdg1) == PDG_K && std::abs(pdg2) == PDG_K && pdg1 == -pdg2 &&
-        mo1 >= 0 && mo1 == mo2)
-      for (size_t t = 0; t < tp.idx.size(); ++t)
-        if (tp.idx[t] == mo1) { ti = (int)t; break; }
+    for (int a : L1) {
+      if (ti >= 0) break;
+      if (std::abs(mc[a].PDG) != PDG_K) continue;
+      const int moa = lundMotherIdx(mc[a].generatorStatus);
+      if (moa < 0) continue;
+      for (int b : L2) {
+        if (mc[b].PDG != -mc[a].PDG || lundMotherIdx(mc[b].generatorStatus) != moa) continue;
+        for (size_t t = 0; t < tp.idx.size(); ++t)
+          if (tp.idx[t] == moa) { ti = (int)t; break; }
+        if (ti >= 0) {
+          setLegTruth(mc, a, out.trk1_mcpdg, out.trk1_mothpdg);
+          setLegTruth(mc, b, out.trk2_mcpdg, out.trk2_mothpdg);
+          break;
+        }
+      }
+    }
     out.truephi_idx.push_back(ti);
     out.cls.push_back(ti >= 0 ? 1 : 0);
   }
