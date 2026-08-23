@@ -320,7 +320,7 @@ struct TrkBlock {
   RVec<int>   origIdx;   // index into the original Tracks collection
   RVec<int>   q;         // physical charge, +sign(omega)
   RVec<float> p, costheta;
-  RVec<float> d0, z0;    // perigee parameters [cm]
+  RVec<float> d0, z0;    // impact parameters w.r.t. the beamspot [cm]
   RVec<float> sigd0;     // sqrt(cov[0]) [cm]
   RVec<int>   nvdet, nitc;
   RVec<float> chi2ndf;   // track fit chi2/ndf
@@ -335,7 +335,8 @@ inline void reserveTrk(TrkBlock& b, size_t n) {
 }
 
 // Per-entry auxiliaries of one selected trackstate collection; a short or
-// absent vector yields the -1 "unknown" sentinel.
+// absent vector yields the -1 "unknown" sentinel. The beamspot [cm] is the
+// reference point of the stored impact parameters (origin when absent).
 struct TrkAux {
   const RVec<int>*   orig_idx;
   const RVec<int>*   nvdet;
@@ -343,6 +344,7 @@ struct TrkAux {
   const RVec<float>* chi2ndf;
   const RVec<int>*   isprim;
   const RVec<int>*   pool;
+  double bsx = 0., bsy = 0., bsz = 0.;
 
   int ival(const RVec<int>* src, int k) const {
     return (src && k >= 0 && k < (int)src->size()) ? (*src)[k] : -1;
@@ -358,8 +360,13 @@ inline void pushTrk(TrkBlock& b, const RVec<edm4hep::TrackState>& tracks, int k,
   b.q.push_back((tracks[k].omega > 0) ? 1 : -1);
   b.p.push_back(p.Mag());
   b.costheta.push_back(p.Mag() > 0. ? p.Z() / p.Mag() : -99.);
-  b.d0.push_back(tracks[k].D0);
-  b.z0.push_back(tracks[k].Z0);
+  // perigee parameters re-referenced to the beamspot; these tracks carry the
+  // EDM4HEP-flipped D0/omega, hence the signs opposite to
+  // AlephSelection::select_tracks_impactparameters_bs
+  const double cphi = std::cos(tracks[k].phi), sphi = std::sin(tracks[k].phi);
+  const double s = aux.bsx * cphi + aux.bsy * sphi;
+  b.d0.push_back(tracks[k].D0 + aux.bsx * sphi - aux.bsy * cphi + 0.5 * tracks[k].omega * s * s);
+  b.z0.push_back(tracks[k].Z0 - aux.bsz + tracks[k].tanLambda * s);
   b.sigd0.push_back(tracks[k].covMatrix[0] > 0. ? std::sqrt(tracks[k].covMatrix[0]) : -1.);
   b.nvdet.push_back(aux.ival(aux.nvdet, k));
   b.nitc.push_back(aux.ival(aux.nitc, k));

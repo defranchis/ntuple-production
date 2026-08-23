@@ -894,7 +894,8 @@ class Analysis():
             # every selection value is a constant in analyzer_phikk.h
             phikk_expr = ("FCCAnalyses::AlephPhiKK::findPhiKK(trackstates_selected_baseline_flipped, "
                           "selBaselineOrigIdx, trkaux_nvdet, trkaux_nitc, trkaux_chi2ndf, "
-                          f"trkaux_isprim, VertexObject_looseBS, {BZ}, v0n_claimed_orig)")
+                          f"trkaux_isprim, VertexObject_looseBS, {BZ}, v0n_claimed_orig, "
+                          "Beamspot_x*1e-3, Beamspot_y*1e-3, Beamspot_z*1e-3)")
             if self.do_pvnew:
                 # explicit entry guard (see V0sNew_event above)
                 phikk_expr = self._pv_guard(
@@ -929,7 +930,7 @@ class Analysis():
             dstar_expr = ("FCCAnalyses::AlephDstar::findDstar(trackstates_selected_baseline_flipped, "
                           "selBaselineOrigIdx, trkaux_nvdet, trkaux_nitc, trkaux_chi2ndf, "
                           "trkaux_isprim, dstar_pool_all, VertexObject_looseBS, v0n_claimed_orig, "
-                          f"{BZ})")
+                          f"{BZ}, Beamspot_x*1e-3, Beamspot_y*1e-3, Beamspot_z*1e-3)")
             if self.do_pvnew:
                 # explicit entry guard (see V0sNew_event above)
                 dstar_expr = self._pv_guard(

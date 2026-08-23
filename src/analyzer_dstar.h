@@ -212,13 +212,14 @@ inline DstarCands findDstar(
     const RVec<int>& pool,
     const VertexingUtils::FCCAnalysesVertex& PV,
     const RVec<int>& veto_orig,
-    double solenoidBz) {
+    double solenoidBz,
+    double bsx, double bsy, double bsz) {
 
   DstarCands out;
   const int nTr = tracks.size();
   if (nTr < 2) return out;
 
-  const TrkAux aux{&orig_idx, &nvdet, &nitc, &chi2ndf, &isprim, &pool};
+  const TrkAux aux{&orig_idx, &nvdet, &nitc, &chi2ndf, &isprim, &pool, bsx, bsy, bsz};
   auto nv = [&](const RVec<int>& src, int k) {
     return (k >= 0 && k < (int)src.size()) ? src[k] : -1;
   };

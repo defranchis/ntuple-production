@@ -126,13 +126,14 @@ inline PhiKKCands findPhiKK(
     const RVec<int>& isprim,
     const VertexingUtils::FCCAnalysesVertex& PV,
     double solenoidBz,
-    const RVec<int>& veto_orig) {
+    const RVec<int>& veto_orig,
+    double bsx, double bsy, double bsz) {
 
   PhiKKCands out;
   const int nTr = tracks.size();
   if (nTr < 2) return out;
 
-  const TrkAux aux{&orig_idx, &nvdet, &nitc, &chi2ndf, &isprim, nullptr};
+  const TrkAux aux{&orig_idx, &nvdet, &nitc, &chi2ndf, &isprim, nullptr, bsx, bsy, bsz};
   auto oidx = [&](int k) {
     return (k >= 0 && k < (int)orig_idx.size()) ? orig_idx[k] : -1;
   };
