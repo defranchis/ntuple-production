@@ -48,9 +48,11 @@ using Mat35 = Eigen::Matrix<double, 3, 5>;
 // = more tracks left to the secondary finders.
 constexpr double PVN_CHI2_MAX = 5.0;
 
-// track pre-selection window on the impact parameters, cm
+// track pre-selection window on the impact parameters, cm. The z window must
+// cover the whole luminous region (sigma_z ~ 0.7 cm): at 2 cm, 0.3-0.6% of the
+// events had no track inside it and fell back to the beamspot as their vertex.
 constexpr double PVN_D0_MAX = 0.75;
-constexpr double PVN_Z0_MAX = 2.0;
+constexpr double PVN_Z0_MAX = 5.0;
 
 // beam-spot constraint widths, PHYSICAL cm; the selection fit and the final fit
 // share them. The legacy chain rescales them to its own unit convention.

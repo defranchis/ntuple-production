@@ -66,7 +66,7 @@ The selection is not configurable from the command line: every tuned value is a 
 
 ### The primary-vertex selection
 
-Tracks enter the fit through a pre-selection window on the impact parameters, `|D0| < 0.75 cm` and `|Z0| < 2 cm` (`PVN_D0_MAX`, `PVN_Z0_MAX`), referenced to the run beamspot — or to the origin under `--oldPV`, which leaves it off-centre by the beamspot offset in data. Track/vertex compatibility is then judged at `chi2max = 5` (`PVN_CHI2_MAX`); lowering it claims fewer tracks as primary and so leaves more to the secondary finders.
+Tracks enter the fit through a pre-selection window on the impact parameters, `|D0| < 0.75 cm` and `|Z0| < 5 cm` (`PVN_D0_MAX`, `PVN_Z0_MAX`), referenced to the run beamspot — or to the origin under `--oldPV`, which leaves it off-centre by the beamspot offset in data. Track/vertex compatibility is then judged at `chi2max = 5` (`PVN_CHI2_MAX`); lowering it claims fewer tracks as primary and so leaves more to the secondary finders.
 
 Both PV fits — the selection fit that prunes the track list and the final position fit — share one beamspot constraint, of Gaussian widths 200 um transverse in x, 100 um in y and 2 cm along the beam (`PVN_BS_SIGMA_X/Y/Z`, declared in cm). All of these live in [`analyzer_pvnew.h`](analyzer_pvnew.h), which is loaded for either PV chain because the legacy chain reads the same numbers, rescaled to its own unit convention.
 
