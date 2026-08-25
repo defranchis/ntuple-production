@@ -924,15 +924,13 @@ get_ptrel_log_cluster(const rv::RVec<fastjet::PseudoJet> &jets,
 }
 
 // --- constituent track parameters w.r.t. the primary vertex ------------------
-// Same algebra as ReconstructedParticle2Track::XPtoPar_dxy/dz/phi/C/ct,
+// Same algebra as ReconstructedParticle2Track::XPtoPar_dxy/dz/phi,
 // evaluated once per constituent from the perigee track parameters, with every curvature term in cm units: the
-// upstream helpers use c in GeV/(T m) for dxy/dz/phi (positions in metres) and
-// GeV/(T mm) for C (curvature in 1/mm), while the ALEPH track states, their
+// upstream helpers use c in GeV/(T m) (positions in metres), while the ALEPH track states, their
 // covariances and the vertices are in cm and 1/cm. Inputs: the track-state
 // collection ordered by the RecoParticle->Track relation (so that
-// tracks.at(p.tracks_begin) is the particle's own state and neutral particles,
-// whose tracks_begin equals the number of links, fall outside it and get -9
-// for all three), the primary vertex (cm) and Bz (T).
+// tracks.at(p.tracks_begin) is the particle's own state), the primary vertex
+// (cm) and Bz (T). Neutral constituents have no track and get -9 everywhere.
 struct TrackParamsAtPV {
   rv::RVec<FCCAnalysesJetConstituentsData> dxy, dz, phi0, C, ct;
 };
@@ -950,7 +948,9 @@ get_constituent_trackParamsAtPV(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
     auto &oC   = out.C.emplace_back();
     auto &oct  = out.ct.emplace_back();
     for (const auto &rp : jet_csts) {
-      if (!(rp.tracks_begin < tracks.size())) {
+      // tracks_begin != tracks_end is the actual "has a track" test: a neutral's
+      // tracks_begin can still be in range and would then read another particle's track.
+      if (!(rp.tracks_begin != rp.tracks_end && rp.tracks_begin < tracks.size())) {
         odxy.push_back(-9.); odz.push_back(-9.); ophi.push_back(-9.);
         oC.push_back(-9.); oct.push_back(-9.);
         continue;
@@ -991,9 +991,62 @@ get_constituent_trackParamsAtPV(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
         odz.push_back((dot > 0.0) ? x(2) - ct * st : x(2) + ct * st);
       }
       ophi.push_back(TMath::ATan2((p(1) - a * x(0)) / T, (p(0) + a * x(1)) / T));
-      // curvature [1/cm] with the sign of the charge (as XPtoPar_C), and cot(theta)
-      oC.push_back(std::copysign(1.0, rp.charge) * Bz * AlephUnits::kPtPerTeslaCm / (2 * pt));
-      oct.push_back(p(2) / pt);
+      // Curvature 1/(2R) [1/cm] with the sign of the charge, and cot(theta): both
+      // taken straight from the fitted track state rather than from the energy-flow momentum.
+      oC.push_back(std::copysign(0.5 * std::abs(ts.omega), rp.charge));
+      oct.push_back(ts.tanLambda);
+    }
+  }
+  return out;
+}
+
+// --- constituent covariance entry -------------------------------------------
+// covMatrix[k] of the constituent's own track state, with the begin!=end test
+// that the upstream getters lack: a neutral's tracks_begin can be in range and
+// would otherwise return another particle's covariance instead of -9.
+inline rv::RVec<FCCAnalysesJetConstituentsData>
+get_constituent_trackCov(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
+                         const rv::RVec<edm4hep::TrackState> &tracks, int k)
+{
+  rv::RVec<FCCAnalysesJetConstituentsData> out;
+  for (const auto &jet_csts : jcs) {
+    auto &o = out.emplace_back();
+    for (const auto &rp : jet_csts) {
+      if (rp.tracks_begin != rp.tracks_end && rp.tracks_begin < tracks.size())
+        o.push_back(tracks.at(rp.tracks_begin).covMatrix[k]);
+      else
+        o.push_back(-9.);
+    }
+  }
+  return out;
+}
+
+// --- constituent distance to the jet axis -----------------------------------
+// Same algebra as JetConstituentsUtils::get_JetDistVal_clusterV, but the track
+// direction is rebuilt from the PV-referenced perigee parameters instead of the
+// energy-flow momentum, which is quoted at the track's first point.
+inline rv::RVec<FCCAnalysesJetConstituentsData>
+get_constituent_jetDistVal(const rv::RVec<fastjet::PseudoJet> &jets,
+                           const rv::RVec<FCCAnalysesJetConstituents> &jcs,
+                           const rv::RVec<FCCAnalysesJetConstituentsData> &D0,
+                           const rv::RVec<FCCAnalysesJetConstituentsData> &Z0,
+                           const rv::RVec<FCCAnalysesJetConstituentsData> &phi0,
+                           const rv::RVec<FCCAnalysesJetConstituentsData> &ct)
+{
+  rv::RVec<FCCAnalysesJetConstituentsData> out;
+  for (size_t i = 0; i < jets.size(); ++i) {
+    auto &o = out.emplace_back();
+    TVector3 p_jet(jets[i].px(), jets[i].py(), jets[i].pz());
+    const auto &csts = jcs.at(i);
+    for (size_t j = 0; j < csts.size(); ++j) {
+      const double d0 = D0.at(i).at(j), ph = phi0.at(i).at(j);
+      if (d0 == -9) { o.push_back(-9); continue; }
+      TVector3 d(-d0 * TMath::Sin(ph), d0 * TMath::Cos(ph), Z0.at(i).at(j));
+      TVector3 p_ct(TMath::Cos(ph), TMath::Sin(ph), ct.at(i).at(j));
+      TVector3 n = p_ct.Cross(p_jet);
+      // the normal is undefined for a track collinear with the jet axis
+      if (n.Mag2() <= 0.) { o.push_back(-9); continue; }
+      o.push_back(n.Unit().Dot(d));
     }
   }
   return out;
