@@ -1056,28 +1056,31 @@ class Analysis():
         # re-index through the RecoParticle->Track relation so that .at(tracks_begin) picks the particle's own track
         df = df.Define("TrackStateByRP", "AlephSelection::reindexByRPLink(TrackStateFlipped, _RecoParticles_tracks.index)")
 
-        # dxy/dz/phi0/C/ct w.r.t. the PV, computed once with every curvature term in cm (see analyzer.h)
+        # dxy/dz/phi0 w.r.t. the PV, computed once with every curvature term in cm; C and ct
+        # are the fitted curvature and dip angle (see analyzer.h)
         df = df.Define("pfcand_trkparPV",   "AlephSelection::get_constituent_trackParamsAtPV(jetc, TrackStateByRP, Vertex_refit_tlv, Bz)")
         df = df.Define("pfcand_dxy",        "pfcand_trkparPV.dxy")
         df = df.Define("pfcand_dz",         "pfcand_trkparPV.dz")
         df = df.Define("pfcand_phi0",       "pfcand_trkparPV.phi0")
         df = df.Define("pfcand_C",          "pfcand_trkparPV.C")
         df = df.Define("pfcand_ct",         "pfcand_trkparPV.ct")
-        df = df.Define("pfcand_dptdpt",     f'JetConstituentsUtils::get_omega_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_dxydxy",     f'JetConstituentsUtils::get_d0_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_dzdz",       f'JetConstituentsUtils::get_z0_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_dphidphi",   f'JetConstituentsUtils::get_phi0_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_detadeta",   f'JetConstituentsUtils::get_tanlambda_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_dxydz",      f'JetConstituentsUtils::get_d0_z0_cov(jetc, TrackStateByRP)') # do we not need to recalculate this? 
-        df = df.Define("pfcand_dphidxy",    f'JetConstituentsUtils::get_phi0_d0_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_phidz",      f'JetConstituentsUtils::get_phi0_z0_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_phictgtheta",f'JetConstituentsUtils::get_tanlambda_phi0_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_dxyctgtheta",f'JetConstituentsUtils::get_tanlambda_d0_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_dlambdadz",  f'JetConstituentsUtils::get_tanlambda_z0_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_cctgtheta",  f'JetConstituentsUtils::get_omega_tanlambda_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_phic",       f'JetConstituentsUtils::get_omega_phi0_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_dxyc",       f'JetConstituentsUtils::get_omega_d0_cov(jetc, TrackStateByRP)') 
-        df = df.Define("pfcand_cdz",        f'JetConstituentsUtils::get_omega_z0_cov(jetc, TrackStateByRP)')
+        # track covariance, lower-triangular packing in the order (d0, phi0, omega, z0, tanLambda):
+        # cov(a,b) with a >= b sits at index a*(a+1)/2 + b
+        df = df.Define("pfcand_dptdpt",     "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 5)")
+        df = df.Define("pfcand_dxydxy",     "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 0)")
+        df = df.Define("pfcand_dzdz",       "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 9)")
+        df = df.Define("pfcand_dphidphi",   "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 2)")
+        df = df.Define("pfcand_detadeta",   "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 14)")
+        df = df.Define("pfcand_dxydz",      "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 6)") # do we not need to recalculate this?
+        df = df.Define("pfcand_dphidxy",    "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 1)")
+        df = df.Define("pfcand_phidz",      "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 7)")
+        df = df.Define("pfcand_phictgtheta","AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 11)")
+        df = df.Define("pfcand_dxyctgtheta","AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 10)")
+        df = df.Define("pfcand_dlambdadz",  "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 13)")
+        df = df.Define("pfcand_cctgtheta",  "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 12)")
+        df = df.Define("pfcand_phic",       "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 4)")
+        df = df.Define("pfcand_dxyc",       "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 3)")
+        df = df.Define("pfcand_cdz",        "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 8)")
 
         ############################################# Btag Variables #######################################################
 
@@ -1085,7 +1088,7 @@ class Analysis():
         df = df.Define("pfcand_btagSip2dSig",   "JetConstituentsUtils::get_Sip2dSig(pfcand_btagSip2dVal, pfcand_dxydxy)") 
         df = df.Define("pfcand_btagSip3dVal",   "JetConstituentsUtils::get_Sip3dVal_clusterV(jets, pfcand_dxy, pfcand_dz, pfcand_phi0, Bz)") 
         df = df.Define("pfcand_btagSip3dSig",   "JetConstituentsUtils::get_Sip3dSig(pfcand_btagSip3dVal, pfcand_dxydxy, pfcand_dzdz)") 
-        df = df.Define("pfcand_btagJetDistVal","JetConstituentsUtils::get_JetDistVal_clusterV(jets, jetc, pfcand_dxy, pfcand_dz, pfcand_phi0, Bz)") 
+        df = df.Define("pfcand_btagJetDistVal","AlephSelection::get_constituent_jetDistVal(jets, jetc, pfcand_dxy, pfcand_dz, pfcand_phi0, pfcand_ct)")
         df = df.Define("pfcand_btagJetDistSig","JetConstituentsUtils::get_JetDistSig(pfcand_btagJetDistVal, pfcand_dxydxy, pfcand_dzdz)")
 
 
