@@ -925,7 +925,7 @@ get_ptrel_log_cluster(const rv::RVec<fastjet::PseudoJet> &jets,
 
 // --- constituent track parameters w.r.t. the primary vertex ------------------
 // Same algebra as ReconstructedParticle2Track::XPtoPar_dxy/dz/phi/C/ct,
-// evaluated once per constituent, with every curvature term in cm units: the
+// evaluated once per constituent from the perigee track parameters, with every curvature term in cm units: the
 // upstream helpers use c in GeV/(T m) for dxy/dz/phi (positions in metres) and
 // GeV/(T mm) for C (curvature in 1/mm), while the ALEPH track states, their
 // covariances and the vertices are in cm and 1/cm. Inputs: the track-state
@@ -959,7 +959,13 @@ get_constituent_trackParamsAtPV(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
       const float D0_wrt0 = ts.D0, Z0_wrt0 = ts.Z0, phi0_wrt0 = ts.phi;
       TVector3 X(-D0_wrt0 * TMath::Sin(phi0_wrt0), D0_wrt0 * TMath::Cos(phi0_wrt0), Z0_wrt0);
       TVector3 x = X - V.Vect();
-      TVector3 p(rp.momentum.x, rp.momentum.y, rp.momentum.z);
+      // The energy-flow momentum is quoted at the track's first point, not at
+      // the perigee: keep its magnitude, take the direction from the perigee
+      // parameters so that X and p describe the same helix point.
+      const double pmag = TVector3(rp.momentum.x, rp.momentum.y, rp.momentum.z).Mag();
+      const double tl = ts.tanLambda;
+      const double ptp = pmag / TMath::Sqrt(1.0 + tl * tl);
+      TVector3 p(ptp * TMath::Cos(phi0_wrt0), ptp * TMath::Sin(phi0_wrt0), ptp * tl);
       const double a = -rp.charge * Bz * AlephUnits::kPtPerTeslaCm;
       const double pt = p.Pt();
       const double r2 = x(0) * x(0) + x(1) * x(1);
