@@ -399,9 +399,10 @@ class Analysis():
 
     @staticmethod
     def _pv_guard(expr, empty):
-        """Empty-return entry guard on the PV flag: a finder must not run on a
-        vertex the fitter did not converge on."""
-        return f"pv_converged ? {expr} : {empty}"
+        """Empty-return entry guard on the usable-PV predicate: a finder must
+        not run on a vertex that is not converged, fully pruned, and
+        track-supported (pv_good, goodPV() in analyzer_pvnew.h)."""
+        return f"pv_good ? {expr} : {empty}"
 
     def _define_dedx_join(self, df):
         """Track index -> dE/dx measurement index, once per collection per
@@ -568,8 +569,9 @@ class Analysis():
             # both flags above can still read 1. int-typed.
             df = df.Define("pv_trivial",         "int(PVSelNew.trivial)")
             # the three flags combined into the "usable PV" predicate, from the
-            # single named source in analyzer_pvnew.h. Stored only; the existing
-            # consumer ternaries keep their pv_converged-only policy.
+            # single named source in analyzer_pvnew.h. Also the consumer guard
+            # (finder entry ternaries, Vertex_refit_tlv); the three raw flags
+            # stay stored as diagnostics.
             df = df.Define("pv_good",            "int(FCCAnalyses::AlephPVNew::goodPV(PVSelNew))")
             # split from the pruning when it converged, else the
             # beamspot-as-fixed-PV fallback (never the unpruned return)
@@ -580,7 +582,7 @@ class Analysis():
             df = df.Define("Vertex_refit_looseBS", "VertexObject_looseBS.vertex")
             # jet-level IP variables fail open with huge finite values under
             # a garbage PV -> substitute the beam-spot position on the flag
-            df = df.Define("Vertex_refit_tlv", "pv_converged ? TLorentzVector(Vertex_refit_looseBS.position.x, Vertex_refit_looseBS.position.y, Vertex_refit_looseBS.position.z, 0.) : TLorentzVector(Beamspot_x*1e-3, Beamspot_y*1e-3, Beamspot_z*1e-3, 0.)")
+            df = df.Define("Vertex_refit_tlv", "pv_good ? TLorentzVector(Vertex_refit_looseBS.position.x, Vertex_refit_looseBS.position.y, Vertex_refit_looseBS.position.z, 0.) : TLorentzVector(Beamspot_x*1e-3, Beamspot_y*1e-3, Beamspot_z*1e-3, 0.)")
         else:
             # Guard: with fewer than 2 IP-preselected tracks there is no meaningful primary vertex,
             # so return NO primary tracks (the PV fit then falls back to the dummy beamspot vertex).
