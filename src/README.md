@@ -43,6 +43,8 @@ Output files will be in: `/eos/experiment/fcc/ee/analyses/case-studies/aleph/pro
 
 `--year` and `--fraction` is also supported as an argument here. 
 
+The runs listed in `run_veto.py` (vertexing-unusable, tracking-quality and off-plateau-field runs) are vetoed before any selection; `--excludeRuns RUN [RUN ...]` adds runs, `--noRunVeto` switches the list off. `eventsProcessed` still counts the raw input.
+
 ### Run on batch:
 ```
 fccanalysis submit stage1.py -- --tag VXX-XX --MCflavour X --batch --chunks X

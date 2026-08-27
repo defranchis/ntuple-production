@@ -1,6 +1,9 @@
 
 import os
+import sys
 from argparse import ArgumentParser
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from run_veto import vetoed_runs
 
 class Analysis():
 
@@ -27,6 +30,10 @@ class Analysis():
                             help='Run tester file only for validation against Lukas ntuples.')
         parser.add_argument('--chunks', default=None, type=int,
                             help='Number of chunks per process/file')
+        parser.add_argument('--excludeRuns', nargs='+', default=[], type=int, metavar='RUN',
+                            help='data only: veto these run numbers in addition to the run_veto.py list (eventsProcessed still counts the raw input).')
+        parser.add_argument('--noRunVeto', action='store_true',
+                            help='data only: do not apply the run_veto.py list (--excludeRuns still applies).')
         # Parse additional arguments not known to the FCCAnalyses parsers
         # All command line arguments know to fccanalysis are provided in the
         # `cmdline_arg` dictionary.
@@ -160,6 +167,12 @@ class Analysis():
         }
 
         if self.ana_args.doData:
+            veto_runs = set(self.ana_args.excludeRuns)
+            if not self.ana_args.noRunVeto:
+                veto_runs |= set(vetoed_runs())
+            if veto_runs:
+                veto = " && ".join(f"EventHeader.runNumber[0] != {r}" for r in sorted(veto_runs))
+                df = df.Filter(veto, "excludeRuns")
             #df = df.Filter("AlephSelection::sel_class_filter(16)(ClassBitset)   || AlephSelection::sel_class_filter(17)(ClassBitset) ")
             df = df.Filter("AlephSelection::sel_class_filter(16)(ClassBitset) ")
             df = df.Define("jetPID", "-999")
