@@ -977,9 +977,9 @@ get_constituent_trackParamsAtPV(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
       const float D0_wrt0 = ts.D0, Z0_wrt0 = ts.Z0, phi0_wrt0 = ts.phi;
       TVector3 X(-D0_wrt0 * TMath::Sin(phi0_wrt0), D0_wrt0 * TMath::Cos(phi0_wrt0), Z0_wrt0);
       TVector3 x = X - V.Vect();
-      // The energy-flow momentum is quoted at the track's first point, not at
-      // the perigee: keep its magnitude, take the direction from the perigee
-      // parameters so that X and p describe the same helix point.
+      // For a V0 daughter the energy-flow momentum is the V0-refit momentum at
+      // the decay vertex, not at the perigee: keep its magnitude, take the
+      // direction from the perigee parameters so that X and p match.
       const double pmag = TVector3(rp.momentum.x, rp.momentum.y, rp.momentum.z).Mag();
       const double tl = ts.tanLambda;
       const double ptp = pmag / TMath::Sqrt(1.0 + tl * tl);
@@ -1042,7 +1042,7 @@ get_constituent_trackCov(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
 // --- constituent distance to the jet axis -----------------------------------
 // Same algebra as JetConstituentsUtils::get_JetDistVal_clusterV, but the track
 // direction is rebuilt from the PV-referenced perigee parameters instead of the
-// energy-flow momentum, which is quoted at the track's first point.
+// energy-flow momentum, which for V0 daughters is quoted at the V0 vertex.
 inline rv::RVec<FCCAnalysesJetConstituentsData>
 get_constituent_jetDistVal(const rv::RVec<fastjet::PseudoJet> &jets,
                            const rv::RVec<FCCAnalysesJetConstituents> &jcs,
