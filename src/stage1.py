@@ -1,6 +1,9 @@
 
 import os
+import sys
 from argparse import ArgumentParser
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from run_veto import vetoed_runs
 
 PVNEW = "FCCAnalyses::AlephPVNew"  # namespace holding the PV selection constants
 
@@ -213,7 +216,9 @@ class Analysis():
         parser.add_argument('--noDstar', action='store_true',
                             help='Skip the D*+ -> D0(K pi) pi_slow finder (no dstar_*/d0_*/truedstar_*/trued0_* branches).')
         parser.add_argument('--excludeRuns', nargs='+', default=[], type=int, metavar='RUN',
-                            help='data only: veto these run numbers before any selection (eventsProcessed still counts the raw input).')
+                            help='data only: veto these run numbers in addition to the run_veto.py list (eventsProcessed still counts the raw input).')
+        parser.add_argument('--noRunVeto', action='store_true',
+                            help='data only: do not apply the run_veto.py list (--excludeRuns still applies).')
         # Parse additional arguments not known to the FCCAnalyses parsers
         # All command line arguments know to fccanalysis are provided in the
         # `cmdline_arg` dictionary.
@@ -447,8 +452,11 @@ class Analysis():
         }
 
         if self.ana_args.doData:
-            if self.ana_args.excludeRuns:
-                veto = " && ".join(f"EventHeader.runNumber[0] != {r}" for r in sorted(set(self.ana_args.excludeRuns)))
+            veto_runs = set(self.ana_args.excludeRuns)
+            if not self.ana_args.noRunVeto:
+                veto_runs |= set(vetoed_runs())
+            if veto_runs:
+                veto = " && ".join(f"EventHeader.runNumber[0] != {r}" for r in sorted(veto_runs))
                 df = df.Filter(veto, "excludeRuns")
             #df = df.Filter("AlephSelection::sel_class_filter(16)(ClassBitset)   || AlephSelection::sel_class_filter(17)(ClassBitset) ")
             df = df.Filter("AlephSelection::sel_class_filter(16)(ClassBitset) ")

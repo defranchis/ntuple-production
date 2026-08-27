@@ -78,7 +78,7 @@ Two SV collections are written from the same event: `svn_*` runs on the tracks l
 
 ### Other options
 
-`--excludeRuns RUN [RUN ...]` (data only) vetoes the listed run numbers before any selection; `eventsProcessed` still counts the raw input. `--nthreads N` overrides the built-in RDataFrame thread count for the run. `--procfile NAME` restricts a run to one input file of the process (`QQB/NAME` on MC, the year directory on data), which is how one condor job maps to one file.
+In data mode the runs listed in `run_veto.py` (vertexing-unusable, tracking-quality and off-plateau-field runs) are vetoed before any selection; `--excludeRuns RUN [RUN ...]` adds runs, `--noRunVeto` switches the list off. `eventsProcessed` still counts the raw input. `--nthreads N` overrides the built-in RDataFrame thread count for the run. `--procfile NAME` restricts a run to one input file of the process (`QQB/NAME` on MC, the year directory on data), which is how one condor job maps to one file.
 
 Environment overrides for local (non-`--batch`) runs: `ALEPH_RECLUS_DIR=<dir>` reads the input files from `<dir>` instead of `/eos/experiment` (a re-clustered copy lifts the RDataFrame thread cap set by the few TTree clusters of the raw files); `ALEPH_OUT_DIR=<dir>` writes the output under `<dir>` (see above).
 
