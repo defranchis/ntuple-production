@@ -8,6 +8,16 @@ namespace AlephUnits {
 constexpr double kPtPerTeslaCm = 0.0029979;
 // LEP1 beam energy [GeV]: the single source for every xE = E/E_beam branch.
 constexpr double kEBeam = 45.6;
+// Solenoid field: MC is generated at the nominal value; data runs derive it
+// from the magnet current as in ALEPHLIB ALFIEL (nominal 15 kG at 4963750 mA,
+// x1.011 when a compensation coil carries less than 800000 mA).
+constexpr double kBzNominal = 1.5;   // [T]
+constexpr double kGaussPerTesla = 1e4;
+constexpr double kFieldNominalkG = kBzNominal * kGaussPerTesla / 1e3;
+constexpr double kCurrentNominalmA = 4963750.;
+constexpr double kCurrent92OffsetmA = 17700.;   // 1992-93 readout offset
+constexpr double kCompCoilMinmA = 800000.;
+constexpr double kCompCoilOffCorr = 1.011;
 }  // namespace AlephUnits
 
 // PDG 2024 central values [GeV]: the single source for every analyzer mass.

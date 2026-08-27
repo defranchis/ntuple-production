@@ -2,7 +2,6 @@
 import os
 from argparse import ArgumentParser
 
-BZ = 1.5  # solenoid field [T] — single source for the stage1 Define strings
 PVNEW = "FCCAnalyses::AlephPVNew"  # namespace holding the PV selection constants
 
 # Per-daughter dE/dx: the collections to read and the branch suffixes they
@@ -464,6 +463,12 @@ class Analysis():
         df = df.Define("event_class", "AlephSelection::bitsetToIndices(ClassBitset)")
         df = df.Define("event_number", "EventHeader.eventNumber")
         df = df.Define("run_number", "EventHeader.runNumber")
+        # Solenoid field per event: data runs carry the magnet current in the
+        # RunInformation words (ALEPHLIB ALFIEL); MC is generated at the nominal field.
+        if self.ana_args.doData:
+            df = df.Define("Bz_run", "AlephSelection::alephFieldFromRunInfo(RunInformation, EventHeader.runNumber[0])")
+        else:
+            df = df.Define("Bz_run", "FCCAnalyses::AlephUnits::kBzNominal")
 
         # Define RP kinematics
         ####################################################################################################
@@ -680,6 +685,7 @@ class Analysis():
             "SecondaryTracks_looseBS, "               # non-primary tracks
             "trackstates_selected_baseline_flipped, " # all tracks
             "VertexObject_looseBS, "                  # primary vertex
+            "Bz_run, "                                # solenoid field [T]
             "0.8, "                                   # dR prefilter cut
             "false)"                                  # exclusive V0 rejection (skip+break), matching FCCAnalyses@3a4de97 isV0 - the code that produced ntuples-withks
         )
@@ -733,7 +739,7 @@ class Analysis():
             "FCCAnalyses::AlephSelection::get_V0s_ALEPH("
             "SecondaryTracks_looseBS, "
             "VertexObject_looseBS,"
-            f"{BZ}," #solenoidBz
+            "Bz_run," #solenoidBz
             "true," #loose_mass_window
             "-1.," #dR preselection on track pairs (<=0 disables) - 0.4 tested, made it much worse
             "true)" #exclusive tracks (each track in at most one V0) - TESTING against ntuples-withks
@@ -773,7 +779,7 @@ class Analysis():
             # PV block above — truth-free track-state matching, available on data)
             # recover which track pair each candidate came from (compiled get_V0s leaves reco_ind empty);
             # classifyV0s cross-checks this replica against V0s_event pdg/invM and throws on mismatch
-            df = df.Define("v0pairs",       f"FCCAnalyses::AlephTruth::rerunV0Pairing(SecondaryTracks_looseBS, VertexObject_looseBS, {BZ})")
+            df = df.Define("v0pairs",       "FCCAnalyses::AlephTruth::rerunV0Pairing(SecondaryTracks_looseBS, VertexObject_looseBS, Bz_run)")
             # truth classification of the reco V0 candidates (event order = V0s_event order)
             df = df.Define("v0truth",       f"FCCAnalyses::AlephTruth::classifyV0s(V0s_event, v0pairs, SecondaryTracks_looseBS, sec2origIdx, trackToMCs, {coll['GenParticles']}, trueV0s)")
             for _b, _e in TRUEV0_DEFINES:
@@ -791,7 +797,7 @@ class Analysis():
 
         ############################################# Standalone two-tier V0 module ###########################################
         if self.do_v0new:
-            v0n_expr = f"FCCAnalyses::AlephV0New::findV0s(SecondaryTracks_looseBS, VertexObject_looseBS, {BZ})"
+            v0n_expr = "FCCAnalyses::AlephV0New::findV0s(SecondaryTracks_looseBS, VertexObject_looseBS, Bz_run)"
             if self.do_pvnew:
                 # explicit empty-return entry guard on the flag (the window
                 # cuts would empty it anyway, a silent efficiency loss; the
@@ -834,12 +840,12 @@ class Analysis():
             # svm_* = unmasked control twin from the SAME event, for the interplay study.
             SVNEW = "FCCAnalyses::AlephSVNew"
             # two-track seed pass, shared by both masking modes
-            seed_expr = f"{SVNEW}::svSeedPass(SecondaryTracks_looseBS, VertexObject_looseBS, {BZ})"
+            seed_expr = f"{SVNEW}::svSeedPass(SecondaryTracks_looseBS, VertexObject_looseBS, Bz_run)"
             if self.do_pvnew:
                 seed_expr = self._pv_guard(seed_expr, f"{SVNEW}::SVSeeds{{}}")
             df = df.Define("SVSeeds_event", seed_expr)
             for pfx, mode in (("svn", f"{SVNEW}::SVN_MASK_MODE"), ("svm", f"{SVNEW}::SVN_MASK_NONE")):
-                svn_expr = f"{SVNEW}::findSVs(SecondaryTracks_looseBS, VertexObject_looseBS, V0sNew_event, v0n_tight, {mode}, {BZ}, SVSeeds_event)"
+                svn_expr = f"{SVNEW}::findSVs(SecondaryTracks_looseBS, VertexObject_looseBS, V0sNew_event, v0n_tight, {mode}, Bz_run, SVSeeds_event)"
                 if self.do_pvnew:
                     # explicit entry guard (see V0sNew_event above)
                     svn_expr = self._pv_guard(
@@ -896,7 +902,7 @@ class Analysis():
             # every selection value is a constant in analyzer_phikk.h
             phikk_expr = ("FCCAnalyses::AlephPhiKK::findPhiKK(trackstates_selected_baseline_flipped, "
                           "selBaselineOrigIdx, trkaux_nvdet, trkaux_nitc, trkaux_chi2ndf, "
-                          f"trkaux_isprim, VertexObject_looseBS, {BZ}, v0n_claimed_orig, "
+                          "trkaux_isprim, VertexObject_looseBS, Bz_run, v0n_claimed_orig, "
                           "Beamspot_x*1e-3, Beamspot_y*1e-3, Beamspot_z*1e-3)")
             if self.do_pvnew:
                 # explicit entry guard (see V0sNew_event above)
@@ -932,7 +938,7 @@ class Analysis():
             dstar_expr = ("FCCAnalyses::AlephDstar::findDstar(trackstates_selected_baseline_flipped, "
                           "selBaselineOrigIdx, trkaux_nvdet, trkaux_nitc, trkaux_chi2ndf, "
                           "trkaux_isprim, dstar_pool_all, VertexObject_looseBS, v0n_claimed_orig, "
-                          f"{BZ}, Beamspot_x*1e-3, Beamspot_y*1e-3, Beamspot_z*1e-3)")
+                          "Bz_run, Beamspot_x*1e-3, Beamspot_y*1e-3, Beamspot_z*1e-3)")
             if self.do_pvnew:
                 # explicit entry guard (see V0sNew_event above)
                 dstar_expr = self._pv_guard(
@@ -1048,7 +1054,7 @@ class Analysis():
         df = df.Define("pfcand_nTrackHits_ITC",  "AlephSelection::get_constituent_nTrackHits_ITC(jetc, TracksByRP, _Tracks_subdetectorHitNumbers)")
         df = df.Define("pfcand_nTrackHits_TPC",  "AlephSelection::get_constituent_nTrackHits_TPC(jetc, TracksByRP, _Tracks_subdetectorHitNumbers)")
 
-        df = df.Define("Bz", f"{BZ}")
+        df = df.Define("Bz", "Bz_run")
 
         ############################################# Track Parameters and Covariance #######################################################
 
@@ -1288,6 +1294,7 @@ class Analysis():
             # Event variables
             "event_class",
             "event_number",
+            "Bz_run",
             "run_number",
             #"event_type",
             "event_invariant_mass",
