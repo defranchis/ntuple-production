@@ -1072,6 +1072,10 @@ class Analysis():
         df = df.Define("pfcand_phi0",       "pfcand_trkparPV.phi0")
         df = df.Define("pfcand_C",          "pfcand_trkparPV.C")
         df = df.Define("pfcand_ct",         "pfcand_trkparPV.ct")
+        # raw perigee d0/z0 of the constituent's own track state: origin-referenced,
+        # in cm, not recomputed at the PV; -9 for neutrals as for the covariances
+        df = df.Define("pfcand_d0",         "AlephSelection::get_constituent_D0(jetc, TrackStateByRP)")
+        df = df.Define("pfcand_z0",         "AlephSelection::get_constituent_Z0(jetc, TrackStateByRP)")
         # track covariance, lower-triangular packing in the order (d0, phi0, omega, z0, tanLambda):
         # cov(a,b) with a >= b sits at index a*(a+1)/2 + b
         df = df.Define("pfcand_dptdpt",     "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 5)")
@@ -1468,6 +1472,8 @@ class Analysis():
             "pfcand_nTrackHits_TPC", 
             "pfcand_dxy", 
             "pfcand_dz", 
+            "pfcand_d0",
+            "pfcand_z0",
             "pfcand_phi0", 
             "pfcand_C", 
             "pfcand_ct",

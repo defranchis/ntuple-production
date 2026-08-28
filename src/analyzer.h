@@ -1030,6 +1030,43 @@ get_constituent_trackCov(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
   return out;
 }
 
+// --- constituent raw perigee parameter --------------------------------------
+// D0 (which = 0) or Z0 (which = 1) of the constituent's own track state, taken
+// as stored (origin-referenced, cm, signs of the collection passed in). Neutral
+// constituents get -9, the same guard as get_constituent_trackCov.
+inline rv::RVec<FCCAnalysesJetConstituentsData>
+get_constituent_trackParam(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
+                           const rv::RVec<edm4hep::TrackState> &tracks, int which)
+{
+  rv::RVec<FCCAnalysesJetConstituentsData> out;
+  for (const auto &jet_csts : jcs) {
+    auto &o = out.emplace_back();
+    for (const auto &rp : jet_csts) {
+      if (rp.tracks_begin != rp.tracks_end && rp.tracks_begin < tracks.size())
+        o.push_back(which == 0 ? tracks.at(rp.tracks_begin).D0
+                               : tracks.at(rp.tracks_begin).Z0);
+      else
+        o.push_back(-9.);
+    }
+  }
+  return out;
+}
+
+// helpers for the two stored branches
+inline rv::RVec<FCCAnalysesJetConstituentsData>
+get_constituent_D0(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
+                   const rv::RVec<edm4hep::TrackState> &tracks)
+{
+  return get_constituent_trackParam(jcs, tracks, 0);
+}
+
+inline rv::RVec<FCCAnalysesJetConstituentsData>
+get_constituent_Z0(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
+                   const rv::RVec<edm4hep::TrackState> &tracks)
+{
+  return get_constituent_trackParam(jcs, tracks, 1);
+}
+
 // --- constituent distance to the jet axis -----------------------------------
 // Same algebra as JetConstituentsUtils::get_JetDistVal_clusterV, but the track
 // direction is rebuilt from the PV-referenced perigee parameters instead of the
