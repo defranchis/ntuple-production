@@ -186,12 +186,6 @@ class Analysis():
         df = df.Define("event_class", "AlephSelection::bitsetToIndices(ClassBitset)")
         df = df.Define("event_number", "EventHeader.eventNumber")
         df = df.Define("run_number", "EventHeader.runNumber")
-        # Solenoid field per event: data runs carry the magnet current in the
-        # RunInformation words (ALEPHLIB ALFIEL); MC is generated at the nominal field.
-        if self.ana_args.doData:
-            df = df.Define("Bz_run", "AlephSelection::alephFieldFromRunInfo(RunInformation, EventHeader.runNumber[0])")
-        else:
-            df = df.Define("Bz_run", "FCCAnalyses::AlephUnits::kBzNominal")
 
         # Define RP kinematics
         ####################################################################################################
@@ -361,7 +355,6 @@ class Analysis():
             "SecondaryTracks_looseBS, "               # non-primary tracks
             "trackstates_selected_baseline_flipped, " # all tracks
             "VertexObject_looseBS, "                  # primary vertex
-            "Bz_run, "                                # solenoid field [T]
             "0.8, "                                   # dR prefilter cut
             "false)"                                  # exclusive V0 rejection (skip+break), matching FCCAnalyses@3a4de97 isV0 - the code that produced ntuples-withks
         )
@@ -403,7 +396,7 @@ class Analysis():
             "FCCAnalyses::AlephSelection::get_V0s_ALEPH("
             "SecondaryTracks_looseBS, "
             "VertexObject_looseBS,"
-            "Bz_run," #solenoidBz
+            "1.5," #solenoidBz
             "true," #loose_mass_window
             "-1.," #dR preselection on track pairs (<=0 disables) - 0.4 tested, made it much worse
             "true)" #exclusive tracks (each track in at most one V0) - TESTING against ntuples-withks
@@ -473,7 +466,7 @@ class Analysis():
         df = df.Define("pfcand_nTrackHits_ITC",  "AlephSelection::get_constituent_nTrackHits_ITC(jetc, Tracks, _Tracks_subdetectorHitNumbers)")
         df = df.Define("pfcand_nTrackHits_TPC",  "AlephSelection::get_constituent_nTrackHits_TPC(jetc, Tracks, _Tracks_subdetectorHitNumbers)")
 
-        df = df.Define("Bz", "Bz_run")
+        df = df.Define("Bz", '1.5') # luka reads this from the event ? 
 
         ############################################# Track Parameters and Covariance #######################################################
 
@@ -635,7 +628,6 @@ class Analysis():
             # Event variables
             "event_class",
             "event_number",
-            "Bz_run",
             "run_number",
             #"event_type",
             "event_invariant_mass",
