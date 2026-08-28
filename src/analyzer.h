@@ -764,24 +764,6 @@ rv::RVec<rv::RVec<float>> get_PID_pvalue(const rv::RVec<rv::RVec<std::array<doub
   return values;
 }
 
-// Field [T] of a data run from the RunInformation words (beam energy,
-// polarity, magnet current [mA], two compensation-coil currents [mA], ...),
-// following ALEPHLIB ALFIEL; runs above 6000 are stored with negative polarity.
-inline double alephFieldFromRunInfo(const rv::RVec<float>& runInfo, unsigned int run) {
-  using namespace AlephUnits;
-  if (runInfo.size() < 5) return kBzNominal;
-  const double pola = runInfo[1], ica = runInfo[3], icb = runInfo[4];
-  double curr = runInfo[2];
-  if (run > 14000 && run < 25000) curr -= kCurrent92OffsetmA;
-  const double ccor = (ica < kCompCoilMinmA || icb < kCompCoilMinmA) ? kCompCoilOffCorr : 1.;
-  double fieldkG = pola * curr * ccor * kFieldNominalkG / kCurrentNominalmA;
-  if (run > 6000) fieldkG = -fieldkG;
-  // run-specific values fixed by ALEPH
-  if (run == 11961) fieldkG = 15.011;
-  if (run == 25261 || run == 25265) fieldkG = 15.021;
-  return fieldkG * 1e3 / kGaussPerTesla;
-}
-
 // Return a new collection (same type) with D0 signs flipped.
 ROOT::VecOps::RVec<edm4hep::TrackState>
 flipD0_copy(const ROOT::VecOps::RVec<edm4hep::TrackState>& tracks) {
@@ -1269,7 +1251,7 @@ ROOT::VecOps::RVec<edm4hep::TrackState>
 V0rejection_ALEPH(
     const ROOT::VecOps::RVec<edm4hep::TrackState>& np_tracks,
     const FCCAnalysesVertex& PV,
-    double solenoidBz = AlephUnits::kBzNominal,
+    double solenoidBz = 1.5,
     bool inclusive = false)
 {
     int nTr = np_tracks.size();
@@ -1314,23 +1296,22 @@ V0rejection_ALEPH(
     return result;
 }
 
-// SV finding with the ALEPH-tuned V0 rejection and the dR prefilter enabled.
-// Set inclusive_v0=true to match ntuplizer behaviour exactly.
+// SV finding with all ALEPH-specific defaults: 1.5 T field, ALEPH-tuned V0 rejection,
+// dR prefilter enabled. Set inclusive_v0=true to match ntuplizer behaviour exactly.
 ROOT::VecOps::RVec<FCCAnalysesVertex>
 get_SV_event_ALEPH(
     const ROOT::VecOps::RVec<edm4hep::TrackState>& np_tracks,
     const ROOT::VecOps::RVec<edm4hep::TrackState>& all_tracks,
     const FCCAnalysesVertex& PV,
-    double solenoidBz,
     double dR_cut = 0.8,
     bool inclusive_v0 = false)
 {
-    auto tracks_no_v0 = V0rejection_ALEPH(np_tracks, PV, solenoidBz, inclusive_v0);
+    auto tracks_no_v0 = V0rejection_ALEPH(np_tracks, PV, 1.5, inclusive_v0);
     return FCCAnalyses::VertexFinderLCFIPlus::get_SV_event(
         tracks_no_v0, all_tracks, PV,
         false,         // V0 rejection already done above with ALEPH constraints
         10., 10., 5., // chi2_cut, invM_cut, chi2Tr_cut
-        solenoidBz,    // [T]
+        1.5,           // solenoidBz [T]
         dR_cut,       // dR_cut for prefiltering
         true,          // require opposite-charge seed pairs (matches FCCAnalyses@3a4de97 VertexSeed_best)
         false          // LOOSE V0 constraints in per-pair seed screening.
@@ -1514,7 +1495,7 @@ FCCAnalyses::VertexingUtils::FCCAnalysesV0
 get_V0s_ALEPH(
     const ROOT::VecOps::RVec<edm4hep::TrackState>& np_tracks,
     const FCCAnalysesVertex& PV,
-    double solenoidBz = AlephUnits::kBzNominal, bool loose_mass_window = false,
+    double solenoidBz = 1.5, bool loose_mass_window = false,
     double dR_pair_cut = -1., bool exclusive_tracks = false)
 {
   if (loose_mass_window){
