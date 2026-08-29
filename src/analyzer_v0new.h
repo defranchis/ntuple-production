@@ -153,6 +153,56 @@ inline double invMass(const TVector3& p1, double m1, const TVector3& p2, double 
 }
 
 // ---------------------------------------------------------------------------
+// Standard selection of ONE fitted pair, from quantities derived from the fit.
+// tier: 0 rejected, 1 loose, 2 tight; pdg/m = booked hypothesis when tier > 0.
+// ---------------------------------------------------------------------------
+struct V0Sel { int tier; int pdg; double m; };
+
+inline V0Sel evalV0Selection(double chi2, double dis, double cp, double pmag,
+                             double alpha, double qt, double mks, double mlam) {
+  V0Sel s{0, 310, mks};
+  if (chi2 >= CHI2_CUT || !(chi2 == chi2)) return s;
+  if (dis < DIS_LO || dis > DIS_HI) return s;
+  if (pmag <= 0) return s;
+
+  // TIGHT (adopted) package first; arbitration among the tight-passing
+  // hypotheses only, so the tight subset is EXACTLY what the module would
+  // output with the loose tier switched off.
+  bool inWinKs = (mks > KS_M_LO && mks < KS_M_HI);
+  bool inWinLam = (mlam > LAM_M_LO && mlam < LAM_M_HI);
+  bool okKs = inWinKs && cp > ksPointThr(pmag, TIGHT_COS_KS_LOWP,
+                                         TIGHT_COS_KS_MIDP, TIGHT_COS_KS_HIGHP);
+  if (okKs)
+    okKs = std::abs(ksBandEll(alpha, qt, pmag) - 1.) <
+           ksBandThr(pmag, AP_BAND_KS, TIGHT_NSIG_KS_LOWP, TIGHT_NSIG_KS_HIGHP);
+  bool okLam = inWinLam && cp > lamPointThr(pmag, TIGHT_COS_LAM_LOWP) &&
+               qt > TIGHT_QT_MIN_LAM;
+  if (okLam)
+    okLam = std::abs(lamBandEll(alpha, qt, pmag) - 1.) <
+            lamBandThrTight(pmag, AP_LAM_LO);
+  bool tight = okKs || okLam;
+  if (!tight) {
+    // LOOSE training tier: flat pointing, widened AP bands, relaxed
+    // Lambda qT veto; windows/chi2/displacement common.
+    okKs = inWinKs && cp > LOOSE_COS_POINT;
+    if (okKs)
+      okKs = std::abs(ksBandEll(alpha, qt, pmag) - 1.) <
+             ksBandThr(pmag, AP_BAND_KS, LOOSE_NSIG_KS, LOOSE_NSIG_KS);
+    okLam = inWinLam && cp > LOOSE_COS_POINT && qt > LOOSE_QT_MIN_LAM;
+    if (okLam)
+      okLam = std::abs(lamBandEll(alpha, qt, pmag) - 1.) <
+              lamBandThrLoose(pmag, LOOSE_LAM_BAND_LO, LOOSE_LAM_BAND_HI, AP_LAM_LO);
+    if (!okKs && !okLam) return s;
+  }
+  double dks = std::abs(mks - MKS) / (0.5 * (KS_M_HI - KS_M_LO));
+  double dlam = std::abs(mlam - MLAM) / (0.5 * (LAM_M_HI - LAM_M_LO));
+  if (okKs && (!okLam || dks <= dlam)) { s.pdg = 310;  s.m = mks; }
+  else                                 { s.pdg = 3122; s.m = mlam; }
+  s.tier = tight ? 2 : 1;
+  return s;
+}
+
+// ---------------------------------------------------------------------------
 // The finder. np_tracks = flipD0_copy'ed non-primary trackstates, PV = fitted
 // primary vertex (positions in cm). TWO-TIER: only tight-failing pairs enter the
 // LOOSE tier, and tight candidates claim tracks first, so candTight==1 selects
@@ -191,25 +241,22 @@ inline VertexingUtils::FCCAnalysesV0 findV0s(
       auto v = fitTracksCm(tr_pair, np_tracks, solenoidBz);
       if (v.updated_track_momentum_at_vertex.size() != 2) continue;
       double chi2 = v.vertex.chi2; // normalised, ndf=1
-      if (chi2 >= CHI2_CUT || !(chi2 == chi2)) continue;
 
-      // displacement window (cm) + pointing
+      // displacement (cm) + pointing
       TVector3 x(v.vertex.position[0], v.vertex.position[1], v.vertex.position[2]);
       TVector3 d = x - pv;
       double dis = d.Mag();
-      if (dis < DIS_LO || dis > DIS_HI) continue;
 
       TVector3 p1, p2;
       pairMomenta(v, p1, p2);
       TVector3 p = p1 + p2;
       double pmag = p.Mag();
-      if (pmag <= 0) continue;
-      double cp = d.Dot(p) / (dis * pmag);
+      double cp = (dis > 0. && pmag > 0.) ? d.Dot(p) / (dis * pmag) : -2.;
       // physical charge = +sign(omega) for the flipD0_copy'ed collection (raw
       // ALEPH omega carries -charge, the flip restores +charge)
       double q1 = (np_tracks[i].omega > 0) ? 1. : -1.;
-      double alpha, qt;
-      apVars(p1, p2, q1, alpha, qt);
+      double alpha = -99., qt = -99.;
+      if (pmag > 0.) apVars(p1, p2, q1, alpha, qt);
 
       // hypothesis masses: Ks(pipi), Lambda(p pi) with proton = higher-|p| track
       // (in a Lambda decay the baryon carries most of the momentum)
@@ -217,42 +264,10 @@ inline VertexingUtils::FCCAnalysesV0 findV0s(
       double mlam = (p1.Mag() > p2.Mag()) ? invMass(p1, m_p_, p2, m_pi_)
                                           : invMass(p1, m_pi_, p2, m_p_);
 
-      // TIGHT (adopted) package first; arbitration among the tight-passing
-      // hypotheses only, so the tight subset is EXACTLY what the module would
-      // output with the loose tier switched off.
-      bool inWinKs = (mks > KS_M_LO && mks < KS_M_HI);
-      bool inWinLam = (mlam > LAM_M_LO && mlam < LAM_M_HI);
-      bool okKs = inWinKs && cp > ksPointThr(pmag, TIGHT_COS_KS_LOWP,
-                                             TIGHT_COS_KS_MIDP, TIGHT_COS_KS_HIGHP);
-      if (okKs)
-        okKs = std::abs(ksBandEll(alpha, qt, pmag) - 1.) <
-               ksBandThr(pmag, AP_BAND_KS, TIGHT_NSIG_KS_LOWP, TIGHT_NSIG_KS_HIGHP);
-      bool okLam = inWinLam && cp > lamPointThr(pmag, TIGHT_COS_LAM_LOWP) &&
-                   qt > TIGHT_QT_MIN_LAM;
-      if (okLam)
-        okLam = std::abs(lamBandEll(alpha, qt, pmag) - 1.) <
-                lamBandThrTight(pmag, AP_LAM_LO);
-      bool tight = okKs || okLam;
-      if (!tight) {
-        // LOOSE training tier: flat pointing, widened AP bands, relaxed
-        // Lambda qT veto; windows/chi2/displacement common.
-        okKs = inWinKs && cp > LOOSE_COS_POINT;
-        if (okKs)
-          okKs = std::abs(ksBandEll(alpha, qt, pmag) - 1.) <
-                 ksBandThr(pmag, AP_BAND_KS, LOOSE_NSIG_KS, LOOSE_NSIG_KS);
-        okLam = inWinLam && cp > LOOSE_COS_POINT && qt > LOOSE_QT_MIN_LAM;
-        if (okLam)
-          okLam = std::abs(lamBandEll(alpha, qt, pmag) - 1.) <
-                  lamBandThrLoose(pmag, LOOSE_LAM_BAND_LO, LOOSE_LAM_BAND_HI, AP_LAM_LO);
-        if (!okKs && !okLam) continue;
-      }
-      double dks = std::abs(mks - MKS) / (0.5 * (KS_M_HI - KS_M_LO));
-      double dlam = std::abs(mlam - MLAM) / (0.5 * (LAM_M_HI - LAM_M_LO));
-      int pdg; double m;
-      if (okKs && (!okLam || dks <= dlam)) { pdg = 310; m = mks; }
-      else                                  { pdg = 3122; m = mlam; }
+      V0Sel sel = evalV0Selection(chi2, dis, cp, pmag, alpha, qt, mks, mlam);
+      if (sel.tier == 0) continue;
 
-      cands.push_back({v, i, j, pdg, m, chi2, tight});
+      cands.push_back({v, i, j, sel.pdg, sel.m, chi2, sel.tier == 2});
     }
   }
 
