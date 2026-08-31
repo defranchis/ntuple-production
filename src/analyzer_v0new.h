@@ -136,6 +136,27 @@ inline double lamBandThrLoose(double pmag, double lo, double hi,
                   lamBandThrTight(pmag, tight_floor));
 }
 
+// TIGHT (adopted) package for ONE hypothesis: mass window, p-tiered pointing
+// and AP band, plus the qT veto for Lambda. Single source for the finder tier
+// and for the offline candTight flag.
+inline bool ksTight(double m, double cp, double pmag, double alpha, double qt) {
+  bool ok = (m > KS_M_LO && m < KS_M_HI) &&
+            cp > ksPointThr(pmag, TIGHT_COS_KS_LOWP, TIGHT_COS_KS_MIDP,
+                            TIGHT_COS_KS_HIGHP);
+  if (ok)
+    ok = std::abs(ksBandEll(alpha, qt, pmag) - 1.) <
+         ksBandThr(pmag, AP_BAND_KS, TIGHT_NSIG_KS_LOWP, TIGHT_NSIG_KS_HIGHP);
+  return ok;
+}
+
+inline bool lamTight(double m, double cp, double pmag, double alpha, double qt) {
+  bool ok = (m > LAM_M_LO && m < LAM_M_HI) && cp > lamPointThr(pmag) &&
+            qt > TIGHT_QT_MIN_LAM;
+  if (ok)
+    ok = std::abs(lamBandEll(alpha, qt, pmag) - 1.) < lamBandThrTight(pmag);
+  return ok;
+}
+
 // momenta of the two tracks at the fitted vertex, already rescaled to the true
 // GeV scale inside findV0s
 inline void pairMomenta(const VertexingUtils::FCCAnalysesVertex& v,
@@ -168,22 +189,14 @@ inline V0Sel evalV0Selection(double chi2, double dis, double cp, double pmag,
   // TIGHT (adopted) package first; arbitration among the tight-passing
   // hypotheses only, so the tight subset is EXACTLY what the module would
   // output with the loose tier switched off.
-  bool inWinKs = (mks > KS_M_LO && mks < KS_M_HI);
-  bool inWinLam = (mlam > LAM_M_LO && mlam < LAM_M_HI);
-  bool okKs = inWinKs && cp > ksPointThr(pmag, TIGHT_COS_KS_LOWP,
-                                         TIGHT_COS_KS_MIDP, TIGHT_COS_KS_HIGHP);
-  if (okKs)
-    okKs = std::abs(ksBandEll(alpha, qt, pmag) - 1.) <
-           ksBandThr(pmag, AP_BAND_KS, TIGHT_NSIG_KS_LOWP, TIGHT_NSIG_KS_HIGHP);
-  bool okLam = inWinLam && cp > lamPointThr(pmag, TIGHT_COS_LAM_LOWP) &&
-               qt > TIGHT_QT_MIN_LAM;
-  if (okLam)
-    okLam = std::abs(lamBandEll(alpha, qt, pmag) - 1.) <
-            lamBandThrTight(pmag, AP_LAM_LO);
+  bool okKs = ksTight(mks, cp, pmag, alpha, qt);
+  bool okLam = lamTight(mlam, cp, pmag, alpha, qt);
   bool tight = okKs || okLam;
   if (!tight) {
     // LOOSE training tier: flat pointing, widened AP bands, relaxed
     // Lambda qT veto; windows/chi2/displacement common.
+    bool inWinKs = (mks > KS_M_LO && mks < KS_M_HI);
+    bool inWinLam = (mlam > LAM_M_LO && mlam < LAM_M_HI);
     okKs = inWinKs && cp > LOOSE_COS_POINT;
     if (okKs)
       okKs = std::abs(ksBandEll(alpha, qt, pmag) - 1.) <
@@ -344,19 +357,8 @@ inline RVec<int> candTight(const VertexingUtils::FCCAnalysesV0& v0s,
     double alpha, qt;
     apVars(p1, p2, q1, alpha, qt);
     double m = v0s.invM[c];
-    bool ok;
-    if (v0s.pdgAbs[c] == 310) {
-      ok = (m > KS_M_LO && m < KS_M_HI) &&
-           cp > ksPointThr(pmag, TIGHT_COS_KS_LOWP, TIGHT_COS_KS_MIDP, TIGHT_COS_KS_HIGHP);
-      if (ok)
-        ok = std::abs(ksBandEll(alpha, qt, pmag) - 1.) <
-             ksBandThr(pmag, AP_BAND_KS, TIGHT_NSIG_KS_LOWP, TIGHT_NSIG_KS_HIGHP);
-    } else {
-      ok = (m > LAM_M_LO && m < LAM_M_HI) && cp > lamPointThr(pmag) && qt > TIGHT_QT_MIN_LAM;
-      if (ok)
-        ok = std::abs(lamBandEll(alpha, qt, pmag) - 1.) <
-             lamBandThrTight(pmag);
-    }
+    bool ok = (v0s.pdgAbs[c] == 310) ? ksTight(m, cp, pmag, alpha, qt)
+                                     : lamTight(m, cp, pmag, alpha, qt);
     out.push_back(ok ? 1 : 0);
   }
   return out;
