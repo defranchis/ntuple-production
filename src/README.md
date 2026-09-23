@@ -53,6 +53,8 @@ The −9 sentinel of `pfcand_d0`/`pfcand_z0` lies inside the physical range of t
 
 `pfcand_dEdx_pads_type` and `pfcand_dEdx_wires_type` are no longer a validity mask: an accepted leg can carry any type and a rejected one reads −9 in value, error and type, so test the value branch rather than `type == 0`.
 
+`pfcand_mc_pdg`, `pfcand_mc_p` [GeV], `pfcand_mc_vtx_r` and `pfcand_mc_vtx_z` [cm, transverse radius and z of the production vertex] describe the MC particle of the first `trackMCLink` entry of the constituent's track; `pfcand_mc_nlinks` counts that track's links. A track links to every MC particle with a hit on it, so the first link is not always the only contributor. All five read −999 for neutral constituents, for tracks without a link, and on data.
+
 ### Run on batch:
 ```
 fccanalysis submit stage1.py -- --tag VXX-XX --MCflavour X --batch --chunks X

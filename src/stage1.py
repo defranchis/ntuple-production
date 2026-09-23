@@ -493,6 +493,20 @@ class Analysis():
         df = df.Define("pfcand_dxyc",       "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 3)")
         df = df.Define("pfcand_cdz",        "AlephSelection::get_constituent_trackCov(jetc, TrackStateByRP, 8)")
 
+        ############################################# MC Truth #######################################################
+
+        if self.ana_args.doData:
+            df = df.Define("TrackTruth", "ROOT::VecOps::RVec<AlephSelection::TrackMCTruth>(Tracks.size())")
+        else:
+            df = df.Define("TrackTruth", f"AlephSelection::get_trackMCTruth(Tracks.size(), _trackMCLink_from.index, _trackMCLink_to.index, {coll['GenParticles']})")
+        df = df.Define("TrackTruthByRP",     "AlephSelection::reindexByRPLink(TrackTruth, _RecoParticles_tracks.index)")
+        df = df.Define("pfcand_mc",          "AlephSelection::get_constituent_mcTruth(jetc, TrackTruthByRP)")
+        df = df.Define("pfcand_mc_pdg",      "pfcand_mc.pdg")
+        df = df.Define("pfcand_mc_p",        "pfcand_mc.p")
+        df = df.Define("pfcand_mc_vtx_r",    "pfcand_mc.vtx_r")
+        df = df.Define("pfcand_mc_vtx_z",    "pfcand_mc.vtx_z")
+        df = df.Define("pfcand_mc_nlinks",   "pfcand_mc.nlinks")
+
         ############################################# Btag Variables #######################################################
 
         df = df.Define("pfcand_btagSip2dVal",   "JetConstituentsUtils::get_Sip2dVal_clusterV(jets, pfcand_dxy, pfcand_phi0, Bz)") 
@@ -816,6 +830,12 @@ class Analysis():
             "pfcand_PID_pval_wires_kaon",
             "pfcand_PID_pval_wires_proton",
 
+            # jet constituent MC truth
+            "pfcand_mc_pdg",
+            "pfcand_mc_p",
+            "pfcand_mc_vtx_r",
+            "pfcand_mc_vtx_z",
+            "pfcand_mc_nlinks",
 
             "EVT_Thrust_Mag",
             "EVT_Thrust_X",

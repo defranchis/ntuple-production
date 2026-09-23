@@ -1175,6 +1175,71 @@ get_constituent_nTrackHits_TPC(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
                                const rv::RVec<int> &shn)
 { return get_constituent_nTrackHits(jcs, tracks, shn, 2); }
 
+// --- per-constituent MC truth -----------------------------------------------
+// From the first trackMCLink entry of the track (from = Tracks, to = MCParticles);
+// kNoMCTruth for a track without link, a neutral constituent, and on data.
+constexpr int kNoMCTruth = -999;
+
+struct TrackMCTruth {
+  int pdg = kNoMCTruth;
+  int nlinks = kNoMCTruth;
+  float p = kNoMCTruth;
+  float vtx_r = kNoMCTruth;
+  float vtx_z = kNoMCTruth;
+};
+
+inline rv::RVec<TrackMCTruth>
+get_trackMCTruth(size_t nTracks, const rv::RVec<int> &linkFrom,
+                 const rv::RVec<int> &linkTo,
+                 const rv::RVec<edm4hep::MCParticleData> &mcp)
+{
+  if (linkFrom.size() != linkTo.size())
+    throw std::runtime_error("get_trackMCTruth: trackMCLink from/to size mismatch");
+  rv::RVec<TrackMCTruth> out(nTracks);
+  for (size_t i = 0; i < linkFrom.size(); ++i) {
+    const int t = linkFrom[i], m = linkTo[i];
+    if (t < 0 || t >= static_cast<int>(nTracks) || m < 0 || m >= static_cast<int>(mcp.size()))
+      throw std::runtime_error("get_trackMCTruth: trackMCLink entry out of range");
+    auto &o = out[t];
+    if (o.nlinks != kNoMCTruth) { ++o.nlinks; continue; }
+    const auto &mc = mcp[m];
+    o.pdg = mc.PDG;
+    o.nlinks = 1;
+    o.p = std::sqrt(mc.momentum.x * mc.momentum.x + mc.momentum.y * mc.momentum.y +
+                    mc.momentum.z * mc.momentum.z);
+    o.vtx_r = std::hypot(mc.vertex.x, mc.vertex.y);
+    o.vtx_z = mc.vertex.z;
+  }
+  return out;
+}
+
+struct ConstituentMCTruth {
+  rv::RVec<rv::RVec<int>> pdg, nlinks;
+  rv::RVec<FCCAnalysesJetConstituentsData> p, vtx_r, vtx_z;
+};
+
+// truth must be ordered by the RecoParticle->Track relation (reindexByRPLink).
+inline ConstituentMCTruth
+get_constituent_mcTruth(const rv::RVec<FCCAnalysesJetConstituents> &jcs,
+                        const rv::RVec<TrackMCTruth> &truth)
+{
+  ConstituentMCTruth out;
+  for (const auto &jet_csts : jcs) {
+    auto &opdg = out.pdg.emplace_back();
+    auto &on   = out.nlinks.emplace_back();
+    auto &op   = out.p.emplace_back();
+    auto &ovr  = out.vtx_r.emplace_back();
+    auto &ovz  = out.vtx_z.emplace_back();
+    for (const auto &rp : jet_csts) {
+      const TrackMCTruth t = (hasOwnTrack(rp, truth.size()) && rp.charge != 0)
+                                 ? truth.at(rp.tracks_begin) : TrackMCTruth{};
+      opdg.push_back(t.pdg); on.push_back(t.nlinks); op.push_back(t.p);
+      ovr.push_back(t.vtx_r); ovz.push_back(t.vtx_z);
+    }
+  }
+  return out;
+}
+
 
 rv::RVec<rv::RVec<int>> mask(const rv::RVec<FCCAnalysesJetConstituentsData> &energies)
     {
