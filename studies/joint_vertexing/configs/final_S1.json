@@ -1,0 +1,34 @@
+{
+ "bs_sig": [
+  0.02,
+  0.01,
+  2.0
+ ],
+ "prior_s": 2.0,
+ "chi2_cut_neg": 7.0,
+ "temps": [
+  8.0,
+  2.0,
+  1.0
+ ],
+ "sv_forward": 0.8,
+ "sv_min_vdet": 0,
+ "weight_form": "student",
+ "student_nu": 4.0,
+ "chi2_mode_sv": "vcov",
+ "chi2_cut_sv": 16.0,
+ "pv_Tmin": 4.0,
+ "pv_ref": "jetproj_hard",
+ "acc_dis_lo": 0.01,
+ "acc_sigl": 0.3,
+ "acc_cos": 0.5,
+ "acc_fsig2": 3.0,
+ "supply": "vd",
+ "sl_score_seeded": true,
+ "sl_score_min": -1.0,
+ "sl_final_min": 0.55,
+ "vd_n_climb": 4,
+ "split_casc": true,
+ "split_order": 0.98,
+ "split_pick": "valid"
+}
