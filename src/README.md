@@ -181,6 +181,28 @@ The dE/dx branches have the names of stage1's per-track `trk_dEdx_*` branches, w
 
 For stage1 run with its default reconstruction options, every branch with a stage1 counterpart equals it event by event: the Kₛ and the daughters' `origIdx`, `q`, `p`, `nTPC` and `isChargedHad` the `v0n_*` entries at `v0n_pdg == 310 && v0n_tight == 1`, the dE/dx values (pulls included) and the truth values the `trk_*` branches at the daughters' `origIdx`. The daughter angles and the link branches have no stage1 counterpart.
 
+### Z → ττ one-prong example (`Ztautau_example.py`)
+
+[`Ztautau_example.py`](Ztautau_example.py) selects Z → τ⁺τ⁻ candidates with one charged track in each thrust hemisphere and writes, per hemisphere, the track's kinematics, fit quality, energy-flow type, dE/dx with ALPHA's particle hypotheses, the energy-flow neutral energy and, on MC, the track truth and the τ decay mode. Its C++ helpers are in [`analyzer_ztautau_example.h`](analyzer_ztautau_example.h).
+
+**Run** it from `src/` as the Kₛ example:
+```
+cd src
+fccanalysis run Ztautau_example.py -i <data.root> -o ztt_data.root -j 8 -- --doData
+fccanalysis run Ztautau_example.py -i <mc.root> -o ztt_mc.root -j 8
+```
+Options after `--`: `--doData`, `--year`, `--noRunList`, `--excludeRuns`, `--beamspotJson` (the last three data only), as in the Kₛ example. The input needs the converter collections of the Kₛ example plus `RunInformation` and, on MC, the `MCParticles` daughters.
+
+**Selection:** on data the run list; ALEPH event class 15 or 24 (dilepton classes); the exact thrust axis of stage1's analysis particles; exactly one baseline track (stage1's track selection) in each hemisphere. No charge, momentum or particle-type cut; the example's own cut values are named constants at the top of the script, the baseline track cuts are stage1's.
+
+**Output:** the tree `events`, one row per selected event. Every `hem_*` and `trk_*` branch has two entries, hemisphere 0 (the one the oriented thrust axis points into, of lower energy) and hemisphere 1; `trk_*` is the hemisphere's track.
+- Event: `run_number`, `event_number`, `event_class`, `EVT_Ebeam`, `EVT_Evis`, `EVT_Thrust_{Mag,X,Y,Z,cosTheta}`.
+- Hemisphere: `hem_{photon,neutralHad}_{E,n}`, summed energy and number of energy-flow photons and neutral hadrons.
+- Track: `trk_{p,pt,costheta,phi,q,d0,z0,d0Err,z0Err}`, hit numbers, χ²/ndf, `trk_efType`, `trk_origIdx`; `trk_dEdx_{wires,pads}_*` with the names of stage1's `trk_dEdx_*`. `trk_d0` and `trk_z0` are w.r.t. the beam spot (data: per-run position from the JSON; MC: the origin).
+- MC: `trk_{truePdg,trueMotherPdg,trueIdx}` (ALPHA's best match) and, per hemisphere, the τ decay mode `hem_tauMode` (electron, muon, one charged hadron with 0, 1 or ≥ 2 π⁰, three prongs, other), `hem_tauNPi0` and the visible momentum `hem_tauVisP`.
+
+The docstring lists every branch with its unit, undefined value and code table.
+
 ### Index map and per-leg labels
 
 Internally, `sec2origIdx` maps the secondary track collection back to the original `Tracks` index space, which is the frame the `v0n_trk{1,2}_origIdx` branches use; the matching is truth-free, so it runs on data too. The map itself is not an output branch. Every candidate leg additionally carries `<leg>_isChargedHad`, a tri-state particle-flow label: 1 = the leg's linked reconstructed particle is a PF charged hadron, 0 = it is an electron, muon or another type, −1 = the track has no linked reconstructed particle of type 0 to 5 (mostly very soft tracks, below the PF momentum reach). The label uses the same particle-flow type codes as `pfcand_isChargedHad`. On V0 daughters a 0 mostly (about 95 %) means `ParticleID.type` 3, a track the ALEPH energy-flow reconstruction itself attributed to a V0, not an electron or a muon: requiring `isChargedHad == 1` drops about a quarter of the tight-Kₛ legs.
