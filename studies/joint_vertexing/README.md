@@ -3,8 +3,9 @@
 An offline Python package (`jv`) that finds and fits the primary vertex (PV) and the secondary vertices (SVs) of an
 event together: every track is shared softly between the PV, the SV candidates and an outlier term in one annealed fit.
 
-**Status:** research prototype, frozen on 2026-11-06, not part of the stage1 pipeline. It runs on files harvested from
-stage1 outputs. The configuration was tuned on simulated events (MC) only; `configs/` holds the frozen version.
+**Status:** research prototype, not part of the stage1 pipeline. It runs on files harvested from stage1 outputs. The
+configurations were tuned on simulated events (MC) only; `configs/` holds the frozen PV + SV fitter ("frozen final",
+`final_*.json`) and the configurations with the V0 class (`v0_*.json`, section "V0 class").
 
 ## Algorithm (frozen final, stage by stage)
 
@@ -50,7 +51,8 @@ Per file stem (e.g. `mc_ZM4212.41`), the same stem in two directories:
 `jv.harvest` joins them by (run, event) on stage1's event list and writes one `<stem>.npz` per file (layout in its
 docstring). The samples are defined in `jv/io.py` (`SAMPLES`): DEV = `mc_ZM4212.41-50` (all tuning), HELDOUT =
 `mc_ZM4212.51-60` (evaluated once after the freeze), DATA = `data_Y15224.10-19`, FAST = the first 20000 events of
-`mc_ZM4212.41`.
+`mc_ZM4212.41`, TRAIN = `mc_ZM4212.50` (fit of the V0 tables), DEV9 = DEV without TRAIN, REG2 = `mc_ZM4212.41-42`
+(regression runs).
 
 ## Environment
 
@@ -67,7 +69,7 @@ folder:
 | `JV_STAGE1` | stage1 outputs (`<stem>.root`), read by `jv.harvest` |
 | `JV_RAW` | EDM4hep inputs of stage1 (`<stem>.root`), read by `jv.harvest` |
 | `JV_INPUTS` | harvested `<stem>.npz`, written by `jv.harvest`, read by the other modules |
-| `JV_RUNS` | run outputs `<tag>/<sample>/<algo>/*.npz`, written by `jv.run`, read by `jv.evaluate` |
+| `JV_RUNS` | run outputs `<tag>/<sample>/<algo>/*.npz`, written by `jv.run`, read by `jv.evaluate` and `jv.evaluate_v0` |
 
 ## Commands
 
@@ -77,7 +79,18 @@ bash run_py.sh 3600 jv.run 32 DEV mytag final_LR=configs/final_LR.json final_S1=
 bash run_py.sh 3600 jv.evaluate 32 mytag DEV $JV_RUNS/mytag/rows_DEV.json --ref nominal --nboot 100
 bash run_py.sh 600 jv.figs $JV_RUNS/mytag/rows_DEV.json $JV_RUNS/mytag/figs_DEV
 bash reproduce.sh 32 DEV mytag                                                # run + evaluate the frozen final rows
+bash reproduce.sh 32 DEV mytag2 v0                                            # the same + the nominal V0 configuration
+bash run_py.sh 1800 jv.evaluate_v0 8 DEV $JV_RUNS/mytag/v0eval_DEV.json       # stage1 V0 lists vs the true-V0 table
 ```
+
+`reproduce.sh` refuses an existing `$JV_RUNS/<tag>/<sample>` and writes `$JV_RUNS/<tag>/rows_<sample>.json`, with `v0`
+also `$JV_RUNS/<tag>/v0_<sample>.json` (one row per S1 working point plus the reference row `stage1_tight`, see its header). `jv.evaluate_v0` and the `v0` mode
+need inputs harvested with the true-V0 arrays (`t_v0t`).
+
+The harvest writes a true-V0 table (`v0t_*`, MC; layout in `jv/harvest.py`) and follows GALEPH continuations
+(restarted particles): a track linked to a continuation of a V0 daughter counts as that daughter (truth class 3, V0
+daughter). Truth-based `jv.evaluate` numbers therefore differ from those on harvests of commit 0a61092, with which the
+frozen final was evaluated. The fit reads no truth arrays; only the truth-seeded supply and the oracle rows do.
 
 `jv.run` arguments: workers, sample (`DEV`, `FAST:20` = 20 events per unit for a smoke test), a new run tag, then
 algorithms (`nominal`, `oracle`, a `jv.hybrid.ROWS` name, or `name=config.json` with overrides of `jv.hybrid.DEFAULT`;
@@ -123,3 +136,41 @@ Overrides of `jv.hybrid.DEFAULT`; the two files differ only in the beam-spot con
 
 The two logistic scores use `jv/score_coefs.json` (candidates) and `jv/score_coefs_final.json` (final SVs), fitted on
 MC truth of the FAST sample.
+
+## V0 class (`configs/v0_S1.json`, `configs/v0_LR.json`)
+
+With `v0_class` (`jv/v0.py`; default off = frozen final) K0S, Lambda and photon conversions (`jv/conv.py`) are two-track
+vertex hypotheses inside the S4 joint fit: each candidate pair competes with the PV, the SVs and the outlier term for
+its two tracks, with odds from a prior, mass, pointing, inner-hit and heavy-flavour (HF) term (model in the `jv/v0.py`
+docstring). `jv.run` then also writes a V0 list per event (`v0_*`, `t_v0`; `jv/run.py`). Tables: `jv/v0_params.json`,
+fitted on `mc_ZM4212.50`.
+
+The nominal configuration is the frozen final plus:
+
+| key | value | meaning |
+|---|---|---|
+| `pt_const` | stage1 | momentum constant 0.0029979 x 1.5 T as in stage1 (`legacy` = 0.0045 of the frozen final) |
+| `remove_tight_v0`, `v0_veto` | false | required: otherwise stage1's tight V0 daughters are removed and V0-like pairs vetoed before the V0 class sees them |
+| `v0_class`, `v0_conv` | true | V0 class, with photon conversions |
+| `v0_prior`, `v0_prior_nm` | S1, S1_nomass (LR: LR, LR_nomass) | prior tables of the weight and of the weight without the mass term (`v0_w0`) |
+| `v0_hf` | S1 (LR: LR) | HF term: displaced tracks at the V0 vertex and in the daughters' jets, decay-length density; the table holds the PV-pointing factor 1.75 |
+| `v0_twin_sig`, `v0_twin_ext` | 3.0, 1.5 | twin rule: an SV within 3 sigma of the V0 vertex is the pair's own hypothesis unless its weights on other tracks sum to more than 1.5 |
+| `v0_conv_rmin` | 4.5 | lower bound on the conversion radius from the beam axis (cm) |
+| `v0_conv_params`, `v0_hit_table`, `v0_conv_hscale` | default, default, 1.3364 / 1.3615 | conversion pointing and inner-hit terms, track-term chi2 scales |
+| `v0_qt_min` | 0.015, 0.015 | minimum Armenteros qT of K0S, Lambda candidates (GeV) |
+
+Variations, each the nominal with one change: `v0_twinfrac_*` (twin rule without a parameter, `v0_twin_ext` frac, HF
+table `*_twinfrac`), `v0_svpoint_*` (SV-pointing odds: `v0_pt_point`, `v0_pt_params`), `v0_decayangle_*` (HF term with
+the |cos theta*| feature, table `*_decayangle`).
+
+The stored weight `v0_w` is not calibrated as a probability. Working points of the nominal configuration, i.e. the
+thresholds on `v0_w` at which its list has the purity of stage1's tight V0 list (conversions: of the tight list of
+`jv/conv.py`) [measured, simulation, DEV; DEV includes `mc_ZM4212.50`, the file the V0 tables were fitted on]:
+
+| beam spot | K0S | Lambda | conversions |
+|---|---|---|---|
+| S1 | 0.398 | 0.329 | 0.381 |
+| LR | 0.399 | 0.329 | 0.380 |
+
+Configuration errors raise when the configuration is built (`jv.hybrid.config`): a V0 configuration without the joint
+fit or with a missing table (ValueError / KeyError), and an `oracle*` row name together with `v0_class` (`jv.run`).

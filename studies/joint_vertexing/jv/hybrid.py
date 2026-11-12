@@ -16,13 +16,16 @@ S3 growth      a track joins a candidate if chi2(candidate) < cap and (rule 'sym
 S4 joint fit   annealed multi-vertex fit of PV + all candidates: soft weights w_kv = exp(-chi2_kv/2T) /
                (exp(-chi2_cut/2T) + sum_v' exp(-chi2_kv'/2T)); beam spot on the PV; lifetime-sign prior on the PV term
                (PV numerator x 1 / (1 + (s+/prior_s)^2), s+ = positive lifetime-signed IP significance); SV refits
-               frozen at the last temperature; vertices within merge_sig merged, SVs within merge_sig of the PV dissolved
+               frozen at the last temperature; vertices within merge_sig merged, SVs within merge_sig of the PV dissolved;
+               with v0_class, V0 candidates (K0S, Lambda, photon conversions; jv/v0.py) as further two-track
+               hypotheses in the same weights
 S5 iterate     unassigned tracks (or PV tracks with large positive lifetime sign) with s > seed_sig seed new pairs ->
                S3 -> S4 (n_iter rounds)
 Alternatives and additions behind switches: seedless candidate supply instead of S2 + S3 ('supply': 'vd' vertex density,
 'da' deterministic annealing, seedless.py); logistic scores of candidates and of final SVs (sl_score_min, sl_final_min);
 S4 weight forms and outlier constants; B -> D cascade split of final SVs (split_casc); S6 acceptance window (accept).
-Output: PV (x, C), SVs (x, C, mass, per-track weights), per-track PV weight and hard assignment (w > 0.5).
+Output: PV (x, C), SVs (x, C, mass, per-track weights), per-track PV weight and hard assignment (w > 0.5); with
+v0_class also the V0 list (run_event).
 Units cm, GeV.
 """
 import time
@@ -33,8 +36,10 @@ from . import tracks as TR
 from . import io as IO
 from . import engine as EN
 from . import seedless as SL
+from . import v0 as V0
 
-M_KS, M_LAM, M_P, M_E = 0.497611, 1.115683, 0.938272, 0.000511
+M_KS, M_LAM, M_P = V0.M_KS, V0.M_LAM, V0.M_P
+M_E = 0.000511
 
 DEFAULT = dict(
     # S0
@@ -98,6 +103,40 @@ DEFAULT = dict(
     acc_fsig_n=None,
     # stricter final-score cut for short flight: SVs with |x_SV - x_PV| < sl_short_fd (cm) need score >= sl_short_min
     sl_short_fd=None, sl_short_min=None,
+    # momentum constant (jv/tracks.py PT_CONSTS): 'legacy' = 0.0045 GeV cm (frozen final) | 'stage1' = 0.0029979 x 1.5 T
+    # (as stage1; the V0 configurations); the stored momenta t_p and the momenta of _mass / _kin_ok are rescaled to it
+    pt_const='legacy',
+    # V0 class (jv/v0.py, model in its docstring; off = frozen final): K0S, Lambda and (v0_conv) photon conversions as
+    # two-track vertex hypotheses inside S4. Needs remove_tight_v0=False and v0_veto=False, else stage1's tight V0
+    # daughters are removed and V0-like pairs vetoed before the V0 class sees them. Tables: file v0_params (in jv/).
+    # Candidates: crossing radius < v0_rmax cm, |dz| < v0_dz_sig sigma or v0_dz_abs cm, mass at the crossing within
+    # v0_pre_ks / v0_pre_lam GeV, two-track fit chi2 < v0_chi2_max, mass at the fit within v0_win_ks / v0_win_lam GeV,
+    # Armenteros qT > v0_qt_min GeV (K0S, Lambda). Terms: Student-t track term (v0_nu dof); K0S / Lambda daughters with
+    # inner hits inside the decay radius: rate eps(p) (table 'hit_eps') and chi2 / v0_hit_scale^2; mass term v0_mass
+    # (error floor v0_sm_min GeV); PV pointing v0_point; prior odds 'prior'[v0_prior]. Admission log R >= v0_admit at the
+    # reference PV; at most v0_max_comp candidates per connected component; output: V0s with weight > v0_out_min (their
+    # tracks are V0-assigned above hard_min)
+    v0_class=False, v0_params='v0_params.json', v0_prior=None,
+    v0_rmax=180., v0_dz_sig=10., v0_dz_abs=1.0, v0_pre_ks=0.15, v0_pre_lam=0.08, v0_win_ks=0.06, v0_win_lam=0.03,
+    v0_chi2_max=50., v0_nu=4.0, v0_hit_scale=3.0, v0_mass=True, v0_point=True,
+    v0_admit=-4.6, v0_max_comp=12, v0_sm_min=0.0005, v0_qt_min=(0.015, 0.035), v0_out_min=0.05,
+    # twin rule: an SV within v0_twin_sig standard deviations of a V0 candidate's vertex is the pair's own hypothesis
+    # (None = off); v0_twin_ext: a number = such an SV holding more than this summed weight on other tracks is no twin
+    # (None = no limit), 'frac' = the pair's share of the SV decides; v0_prior_nm = prior table of the weight without
+    # the mass term (output v0_w0; None = not computed)
+    v0_twin_sig=None, v0_twin_ext=None, v0_prior_nm=None,
+    # photon conversions (v0_conv; jv/conv.py loose selection): pointing 'conv_point'[v0_conv_params]; hit term
+    # 'hit_table'[v0_hit_table]['conversion'] (None = no hit term); track-term chi2 scales for one / both daughters with
+    # inner hits inside the conversion radius v0_conv_hscale; conversion vertex radius from the axis >= v0_conv_rmin cm
+    # (None = no bound)
+    v0_conv=False, v0_conv_params=None, v0_hit_table=None, v0_conv_hscale=(1.0, 1.0), v0_conv_rmin=None,
+    # V0-against-heavy-flavour term 'hfterm'[v0_hf] (None = off; the table also holds the PV-pointing factor
+    # pv_wscale it was fitted with): further displaced tracks (IP significance > v0_hf_sig) at the V0 vertex (chi2 <
+    # v0_hf_chi2) and in the daughters' jets, decay-length density, |cos theta*| when the table has it
+    v0_hf=None, v0_hf_chi2=9.0, v0_hf_sig=3.0,
+    # SV-pointing odds: the K0S / Lambda odds use the pointing to the best origin, PV or an SV, instead of the PV alone
+    # (table 'pt'[v0_pt_params])
+    v0_pt_point=False, v0_pt_params=None,
 )
 
 ROWS = {
@@ -129,6 +168,14 @@ def config(name_or_overrides=None, **kw):
         c['sv_forward'] = c['s4_cos']
     if c['sv_forward'] is None and c['s4_forward']:
         c['sv_forward'] = 0.0
+    if c['v0_class']:
+        # combinations that cannot run: the V0 class lives in the joint fit S4, and every table it selects must exist
+        if c['sv_mode'] != 'finder' or not c['joint']:
+            raise ValueError('v0_class needs the joint fit (sv_mode finder, joint true)')
+        if (c['v0_prior'] is None or (c['v0_conv'] and c['v0_conv_params'] is None)
+                or (c['v0_pt_point'] and c['v0_pt_params'] is None)):
+            raise ValueError('v0_class needs v0_prior, v0_conv needs v0_conv_params, v0_pt_point needs v0_pt_params')
+        V0.check_tables(c)
     return c
 
 
@@ -144,11 +191,16 @@ def _pre_window(E, idx, d0max=0.75, z0max=5.0):
     return (np.abs(d0p) <= d0max) & (np.abs(z0p) <= z0max)
 
 
+_PSCALE = 1.0      # momentum scale of the selected pt_const (tracks.pt_scale), set per event by run_event
+
+
 def _mass(fpar, idx, x, masses=None):
     E_ = 0.; P = np.zeros(3)
     for k, t in enumerate(idx):
         m = TR.M_PI if masses is None else masses[k]
         p = TR.momentum_at(fpar[t], F._arc_near(fpar[t], x))
+        if _PSCALE != 1.0:
+            p = p * _PSCALE
         E_ += np.sqrt(p @ p + m * m); P += p
     return float(np.sqrt(max(E_ * E_ - P @ P, 0.))), P
 
@@ -219,6 +271,8 @@ def _kin_ok(c, fpar, trk, x, C, d, dis, P, pm, u):
         if c['acc2_ang'] is not None or c['acc2_minp'] is not None:
             p1 = TR.momentum_at(fpar[trk[0]], F._arc_near(fpar[trk[0]], x))
             p2 = TR.momentum_at(fpar[trk[1]], F._arc_near(fpar[trk[1]], x))
+            if _PSCALE != 1.0:
+                p1, p2 = p1 * _PSCALE, p2 * _PSCALE
             n1, n2 = np.linalg.norm(p1), np.linalg.norm(p2)
             if c['acc2_minp'] is not None and min(n1, n2) < c['acc2_minp']:
                 return False
@@ -781,8 +835,9 @@ def _f(c, chi2, T):
     return (1. + np.minimum(chi2, 1e6) / (nu * T)) ** (-0.5 * (nu + 2.))
 
 
-def _weight_matrix(c, fpar, fcov, V, Wv, s3f, T, rmaxf, novdet, nvdet, extra=None):
-    """soft weights: V list of Vtx (0 = PV), Wv weights of the last fit per vertex (for the leave-one-out). Returns W"""
+def _weight_matrix(c, fpar, fcov, V, Wv, s3f, T, rmaxf, novdet, nvdet, extra=None, v0=None):
+    """soft weights: V list of Vtx (0 = PV), Wv weights of the last fit per vertex (for the leave-one-out); v0 = V0Set
+    (V0 class, jv/v0.py) or None. Returns W (V0 class on: non-V0 weights times 1 - V0 share; marginals in v0.P)"""
     nt = len(fpar)
     num = np.zeros((len(V), nt))
     modes = (MODE[c['chi2_mode_pv']], MODE[c['chi2_mode_sv']])
@@ -832,6 +887,8 @@ def _weight_matrix(c, fpar, fcov, V, Wv, s3f, T, rmaxf, novdet, nvdet, extra=Non
     W = num / (cutv + sumn)
     if c['chi2_cut_sv'] is not None:
         W[1:] = num[1:] / (_f(c, np.full(nt, c['chi2_cut_sv'], dtype=np.float64), T) + sumn)
+    if v0 is not None and v0.n:
+        W = v0.apply(W, cutv + sumn, T, num, V)
     return W
 
 
@@ -847,6 +904,7 @@ def stage4(E, c, ok, rmax, pvx, pvC, cands, s3, fit_idx, axes=None, jet_of=None)
     extra = (s3f < 0, (t['p'][fit_idx] >= c['sv_min_p']) if c['sv_min_p'] > 0 else None,
              E.get('_veto') if c['drop_veto'] is not None else None)
     V = [Vtx(pvx.copy(), pvC.copy(), [])] + [Vtx(v.x.copy(), v.C.copy(), v.trk) for v in cands]
+    v0s = E.get('_v0') if c['v0_class'] else None
     bs_sig = np.asarray(c['bs_sig'], float) if c['s4_bs_sig'] is None else np.asarray(c['s4_bs_sig'], float)
     Binv = np.diag(1. / bs_sig ** 2)
     msig_pv = c['merge_sig'] if c['merge_sig_pv'] is None else c['merge_sig_pv']
@@ -866,7 +924,7 @@ def stage4(E, c, ok, rmax, pvx, pvC, cands, s3, fit_idx, axes=None, jet_of=None)
     def refit_pv(T=None):
         Wp = W
         if c['pv_Tmin'] is not None and T is not None and T < c['pv_Tmin']:
-            Wp = _weight_matrix(c, fpar, fcov, V, Wv, s3f, c['pv_Tmin'], rmaxf, novdet, nvdet, extra)
+            Wp = _weight_matrix(c, fpar, fcov, V, Wv, s3f, c['pv_Tmin'], rmaxf, novdet, nvdet, extra, v0=v0s)
         if c['pv_excl_sv'] is not None and len(V) > 1:
             # tracks an SV holds at the current temperature do not enter the softened PV term
             Wp = Wp.copy()
@@ -883,7 +941,7 @@ def stage4(E, c, ok, rmax, pvx, pvC, cands, s3, fit_idx, axes=None, jet_of=None)
         if c['prior_update'] and axes is not None and it > 0:
             _, s3n, _, _, _ = TR.ip_info(fpar, fcov, V[0].x, V[0].C, axes, jet_of[fit_idx])
             s3f = s3n
-        W = _weight_matrix(c, fpar, fcov, V, Wv, s3f, T, rmaxf, novdet, nvdet, extra)
+        W = _weight_matrix(c, fpar, fcov, V, Wv, s3f, T, rmaxf, novdet, nvdet, extra, v0=v0s)
         if it == nT:
             break
         refit_pv(T)
@@ -930,9 +988,14 @@ def stage4(E, c, ok, rmax, pvx, pvC, cands, s3, fit_idx, axes=None, jet_of=None)
             extra = (extra[0], extra[1], dm if extra[2] is None else (extra[2] | dm))
         V = [V[g] for g in good]
         Wv = [Wv[g] for g in good]
-        W = _weight_matrix(c, fpar, fcov, V, Wv, s3f, temps[-1], rmaxf, novdet, nvdet, extra)
+        W = _weight_matrix(c, fpar, fcov, V, Wv, s3f, temps[-1], rmaxf, novdet, nvdet, extra, v0=v0s)
         refit_pv(temps[-1])
-        W = _weight_matrix(c, fpar, fcov, V, Wv, s3f, temps[-1], rmaxf, novdet, nvdet, extra)
+        W = _weight_matrix(c, fpar, fcov, V, Wv, s3f, temps[-1], rmaxf, novdet, nvdet, extra, v0=v0s)
+    if v0s is not None:
+        # V0 marginals of the final weights (the last call may have been the PV refit at pv_Tmin)
+        W = _weight_matrix(c, fpar, fcov, V, Wv, s3f, temps[-1], rmaxf, novdet, nvdet, extra, v0=v0s)
+        if c['v0_prior_nm'] is not None and v0s.n:
+            v0s.weights_nomass()
     hard = np.argmax(W, 0)
     hard[W.max(0) <= c['hard_min']] = -1
     if c['sv_final'] == 'hard':
@@ -1068,11 +1131,21 @@ def _split_cascades(E, c, fit_idx, V, hard, px, pC, s3):
 # ---------------------------------------------------------------------------------------------------------------- driver
 def run_event(E, c):
     """returns dict: pv (3), pvC (3x3), svs: list of (x, C, mass, ntrk_hard), wpv (n tracks), assign (n: -1 none,
-    0 PV, k>=1 SV k), wass (weight of the assigned vertex), s3 (lifetime-signed IP significance w.r.t. the output PV)"""
+    0 PV, k>=1 SV k), wass (weight of the assigned vertex), cpu (s, process time), s3 (lifetime-signed IP significance
+    w.r.t. the output PV); with v0_class also v0s: list of (track a (positive), track b, booked PDG code, hypothesis,
+    x, C, mass, final weight, momentum, weight without the mass term or -1) per V0 with weight > v0_out_min, tv0 (n:
+    index in v0s of the track's V0 when its weight > hard_min, -1), and with v0_pt_point v0org = (most probable origin
+    per output V0: 0 PV, k = SV k of the last S4, -1 none; its posterior; per output SV the summed V0 weight times
+    origin posterior on it), at the last temperature of the last S4 (SVs added by the cascade split get 0)"""
+    global _PSCALE
     t0 = time.process_time()
     E['_veto'] = None
+    E['_v0'] = None
     t = E['t']
     n = len(t['q'])
+    _PSCALE = TR.pt_scale(c['pt_const'])
+    p_in = E.setdefault('_p_input', t['p'])      # stored momenta (harvest t_p, legacy constant), kept for a repeated call
+    t['p'] = p_in * _PSCALE if _PSCALE != 1.0 else p_in
     axes = IO.jet_axes(E)
     jet_of = t['jet'].astype(np.int64)
     upk = None
@@ -1115,10 +1188,20 @@ def run_event(E, c):
         inc[idx0[_pre_window(E, idx0, c['pv_window_d0'], c['pv_window_z0'])]] = True
     for v in cands:
         inc[v.trk] = True
+    v0set = None
+    if c['v0_class']:
+        v0c = V0.candidates(E, c, ok, rmax, pvx, pvC, _v0_ref_denominators(c, t, ok, pvx, s3),
+                            0.5 * TR.PT_CONSTS[c['pt_const']], s3=s3)
+        for k in v0c:
+            inc[k['a']] = inc[k['b']] = True
+        v0set = V0.V0Set(c, v0c)
     fit_idx = np.nonzero(inc)[0]
     loc = np.full(n, -1); loc[fit_idx] = np.arange(len(fit_idx))
     for v in cands:
         v.trk = [int(loc[k]) for k in v.trk]
+    if v0set is not None:
+        v0set.localize(loc)
+        E['_v0'] = v0set
     px, pC, V, W = stage4(E, c, ok, rmax, pvx, pvC, cands, s3, fit_idx, axes, jet_of)
     for itr in range(c['n_iter'] if c['s5_mode'] != 'none' else 0):
         hard = np.argmax(W, 0); hard[W.max(0) <= c['hard_min']] = -1
@@ -1126,6 +1209,8 @@ def run_event(E, c):
             _, s3, _, _, _ = TR.ip_info(t['fpar'], t['fcov'], px, pC, axes, jet_of)
         iss = c['seed_sig'] if c['iter_seed_sig'] is None else c['iter_seed_sig']
         lm = (hard < 0) | ((hard == 0) & (s3[fit_idx] > c['iter_sig']))
+        if v0set is not None and v0set.n:
+            lm &= v0set.share <= c['hard_min']        # tracks held by a V0 do not seed SVs
         if c['iter_sv_chi2'] is not None:
             for k, v in enumerate(V):
                 m = hard == k + 1
@@ -1157,7 +1242,52 @@ def run_event(E, c):
         tr = fit_idx[hard == k + 1]
         svs.append((v.x, v.C, _mass(t['fpar'], tr, v.x)[0] if len(tr) else 0., len(tr)))
     _, s3o, _, _, _ = TR.ip_info(t['fpar'], t['fcov'], px, pC, axes, jet_of)
-    return dict(pv=px, pvC=pC, svs=svs, wpv=wpv, assign=assign, wass=wass, cpu=time.process_time() - t0, s3=s3o)
+    out = dict(pv=px, pvC=pC, svs=svs, wpv=wpv, assign=assign, wass=wass, cpu=0., s3=s3o)
+    if c['v0_class']:
+        tv0 = np.full(n, -1, np.int64)
+        v0s = []
+        for k in range(v0set.n):
+            if v0set.P[k] > c['v0_out_min']:
+                K = v0set.k[k]
+                w0 = float(v0set.P0[k]) if v0set.P0 is not None else -1.
+                v0s.append((K['a'], K['b'], V0.SPEC_PDG[K['hyp']], K['hyp'], K['x'], K['C'], K['m'], float(v0set.P[k]), K['p'], w0))
+                if v0set.P[k] > c['hard_min']:
+                    tv0[K['a']] = tv0[K['b']] = len(v0s) - 1
+        out['v0s'] = v0s
+        out['tv0'] = tv0
+        if c['v0_pt_point']:
+            # origins of the output V0s and the V0 weight per SV (state of the last apply at the last temperature)
+            st = v0set.org.get(c['temps'][-1])
+            org, orgw = [], []
+            ptw = np.zeros(len(V))
+            for k in range(v0set.n):
+                if v0set.P[k] > c['v0_out_min']:
+                    if st is None:
+                        org.append(-1); orgw.append(-1.)
+                        continue
+                    j = int(np.argmax(st[0][k]))
+                    org.append(j); orgw.append(float(st[0][k, j]))
+            if st is not None and st[1] is not None:
+                for vi in range(min(len(V), st[0].shape[1] - 1)):
+                    ptw[vi] = float((st[1] * st[0][:, vi + 1] * ~v0set.isconv).sum())
+            out['v0org'] = (org, orgw, ptw)
+    out['cpu'] = time.process_time() - t0
+    return out
+
+
+def _v0_ref_denominators(c, t, ok, pvx, s3):
+    """S4 denominators (outlier constant + PV numerator, T = 1) of the S0 tracks at the reference PV: admission and
+    calibration of the V0 class (inf for other tracks)"""
+    A = np.full(len(t['q']), np.inf)
+    oi = np.nonzero(ok)[0]
+    if len(oi):
+        ch, _ = TR.chi2_to_point(t['fpar'][oi], t['fcov'][oi], pvx)
+        cut = _f(c, np.full(len(oi), c['chi2_cut'], dtype=np.float64), 1.)
+        if c['chi2_cut_neg'] is not None:
+            neg = s3[oi] < 0
+            cut[neg] = _f(c, np.full(int(neg.sum()), c['chi2_cut_neg'], dtype=np.float64), 1.)
+        A[oi] = cut + _f(c, ch, 1.) * _prior(c, s3[oi], 1.)
+    return A
 
 
 def oracle_event(E, prune=True, bs_sig=F.BS_SIG):

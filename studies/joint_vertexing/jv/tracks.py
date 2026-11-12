@@ -5,7 +5,11 @@ parameters p = (D, phi0, C, z0, ct) in the vertex-fitter convention (D = -D0_raw
 conversion `to_fit` from the raw ALEPH state stored in the EDM4hep input), arc parameter L = transverse arc length from the perigee.
 Linearised track model: at a point x the track is replaced by its point of closest approach X (weighted metric) and
 the rank-2 weight matrix D = W - W a a^T W / (a^T W a), W = (A Cov A^T)^-1; chi2(track, x') = (x' - X)^T D (x' - X).
-Units: cm, GeV; B = 1.5 T (pT = 0.0045 / |omega_raw| = 0.00225 / |C|).
+Units: cm, GeV; B = 1.5 T (pT = PT_CONST / |omega_raw| = PT_CONST / 2 / |C|).
+Momentum constant: PT_CONSTS['legacy'] = 0.0045 (the frozen final, used by the functions of this module) or
+PT_CONSTS['stage1'] = kPtPerTeslaCm x kBz = 0.0029979 x 1.5 = 0.00449685 (stage1, src/aleph_units.h), selected by the
+config key pt_const of jv.hybrid: the stored momenta and the momenta of hybrid._mass / _kin_ok are rescaled by
+pt_scale(name); jv.v0 and jv.conv take PT_CONSTS[pt_const] / 2 as an argument.
 """
 import numpy as np
 from numba import njit
@@ -13,7 +17,12 @@ from numba import njit
 KTRI = np.array([[0, 1, 3, 6, 10], [1, 2, 4, 7, 11], [3, 4, 5, 8, 12], [6, 7, 8, 9, 13], [10, 11, 12, 13, 14]])
 KSC = np.array([1., 1., -0.5, 1., 1.])
 FLIP = np.array([1, 4, 6, 8, 10, 12])
-PT_CONST = 0.0045       # GeV cm: pT = PT_CONST / |omega_raw| (B = 1.5 T)
+PT_CONST_LEGACY = 0.0045                    # GeV cm: pT = PT_CONST / |omega_raw|, frozen final (c = 0.3, B = 1.5 T)
+PT_PER_TESLA_CM = 0.0029979                 # GeV / (T cm): stage1 src/aleph_units.h kPtPerTeslaCm
+BZ_TESLA = 1.5                              # T: stage1 src/aleph_units.h kBz
+PT_CONSTS = {'legacy': PT_CONST_LEGACY, 'stage1': PT_PER_TESLA_CM * BZ_TESLA}
+PT_CONST = PT_CONST_LEGACY                  # the constant of the functions below (momentum_at); 0.5 * PT_CONST per |C|
+_PT_HALF = 0.5 * PT_CONST_LEGACY            # = 0.00225 exactly (halving is exact in floating point)
 M_PI = 0.13957039
 
 
@@ -153,7 +162,7 @@ def chi2_to_point(par, cov, x):
 @njit(cache=True)
 def momentum_at(p, L):
     """momentum vector (GeV) of the track at arc L"""
-    pt = 0.00225 / max(abs(p[2]), 1e-12)
+    pt = _PT_HALF / max(abs(p[2]), 1e-12)
     ang = p[1] + 2 * p[2] * L
     return np.array([pt * np.cos(ang), pt * np.sin(ang), pt * p[4]])
 
@@ -212,6 +221,12 @@ def ip_info(par, cov, pv, pvcov, axis_dirs, jet_of):
         ip2[t] = sgn * d2
         s2[t] = sgn * d2 / np.sqrt(max(var2, 1e-14))
     return ip3, s3, ip2, s2, sg
+
+
+def pt_scale(name):
+    """momenta of the selected constant (config pt_const: 'legacy' | 'stage1') over those of PT_CONST (all momenta
+    scale with the constant: pT and pz = pT tanLambda)"""
+    return PT_CONSTS[name] / PT_CONST
 
 
 def max_radius_from_hits(nvdet, nitc):

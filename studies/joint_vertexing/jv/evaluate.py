@@ -19,11 +19,18 @@ Definitions (all lengths um unless stated):
     other secondary and as primary + unmatched), V0/secondary (else, V0 + other secondary >= primary + unmatched), spurious
     (the rest). purity = HF fraction, also vs reconstructed flight distance, SV momentum (vector sum of the hard tracks at
     their perigee), |cos theta| of that momentum. uds fake rate = reco SVs per uds event, any class.
+  V0 content of the SVs (MC inputs with the true-V0 arrays, t_v0t): a V0 daughter track = any baseline track whose
+    largest-weight truth link is a daughter of a true V0 or a GALEPH continuation of one (v0t table: K0S -> pi pi,
+    Lambda -> p pi, conversion -> e e; such tracks have t_cls = 3: jv/harvest.py); per 1000 events: HF-class SVs without
+    any hard-assigned V0 daughter track (hf_clean), HF-class SVs with >= 1 (hf_v0dau), V0/secondary-class and spurious
+    SVs (per algorithm: sv_per_1000_events[<class>]); clean-HF fraction = hf_clean / all SVs (per algorithm:
+    clean_hf_fraction; purity counts hf_v0dau as pure).
   flight significance = sqrt(d^T (C_SV + C_PV)^-1 d), d = SV - PV.
   paired bootstrap: events resampled with replacement (same resample for both algorithms), std of the difference. Keys of
     diff_vs_ref: pv_<flavour>_<x|y|z>_<mean|median|tmean|core|tail|pull_core>, pv_<flavour>_proj_<mean|median|tmean>,
     sv_eff, sv_eff_b_hadron, sv_eff_c_hadron, sv_purity, sv_completeness, uds_fake_rate, sv_eff_vs_<var>_<bin>,
-    sv_purity_vs_<var>_<bin>, cpu_ms_per_event; each [difference, error].
+    sv_purity_vs_<var>_<bin>, cpu_ms_per_event, sv_per1000ev_<hf_clean|hf_v0dau|v0_or_secondary|spurious> (SVs per
+    1000 events), sv_clean_hf_frac (the V0 content keys need inputs with t_v0t); each [difference, error].
 """
 import glob
 import json
@@ -33,6 +40,7 @@ import numpy as np
 from multiprocessing import Pool
 
 from . import io as IO
+from . import tracks as TR
 
 FLAV = {'b': 5, 'c': 4, 'uds': 0}
 CLS = ['primary', 'b', 'c', 'V0', 'other_sec', 'unmatched']
@@ -69,7 +77,7 @@ def load_algo(tag, sample, algo):
 def load_truth(parts):
     """per-event and per-track truth/input arrays aligned with the unit order of `parts`"""
     T = {k: [] for k in ('flav', 'gen', 'pv_nom', 'ntrk', 'thrust', 't_cls', 't_hfv', 'h_ev', 'h_pos', 'h_nch', 'h_fd',
-                         'h_p3', 'h_isb', 'h_nmatched', 'near', 'unit', 't_ev', 'isMC', 't_p3', 'h_parent')}
+                         'h_p3', 'h_isb', 'h_nmatched', 'near', 'unit', 't_ev', 'isMC', 't_p3', 'h_parent', 't_v0d')}
     files = {}
     ev0 = 0
     for p in parts:
@@ -85,10 +93,12 @@ def load_truth(parts):
         ta, tb = o['t'][a], o['t'][b]
         T['t_ev'].append(np.repeat(np.arange(b - a) + ev0, d['ev_ntrk'][sl]))
         par = d['t_par'][ta:tb]
-        pt = 0.0045 / np.maximum(np.abs(par[:, 2]), 1e-9)
+        pt = TR.PT_CONST / np.maximum(np.abs(par[:, 2]), 1e-9)     # legacy constant: tables comparable across rows
         T['t_p3'].append(np.stack([pt * np.cos(par[:, 1]), pt * np.sin(par[:, 1]), pt * par[:, 4]], 1))
         if f.isMC:
             T['t_cls'].append(d['t_cls'][ta:tb])
+            if 't_v0t' in d:                                  # true-V0 daughter track
+                T['t_v0d'].append(d['t_v0t'][ta:tb] >= 0)
             # hfv local -> global index in the concatenated HF table
             ha, hb = o['h'][a], o['h'][b]
             hoff = np.repeat(o['h'][a:b] - ha, d['ev_ntrk'][sl])
@@ -261,6 +271,9 @@ def sv_tables(A, T):
     H = dict(found=found, best_n=best_n, nbase=nbase, resid=resid, best_s=best_s, one=one)
     # track-level content of the SVs
     out['sv_cnt'] = cnt
+    if 't_v0d' in T and len(T['t_v0d']) == len(cls):
+        v0k = tk[T['t_v0d'][tk]]
+        out['sv_nv0dau'] = np.bincount(gsv[v0k], minlength=nsv)
     if nsv:
         d = A['sv_pos'] - A['ev_pv'][A['sv_ev']]
         back = np.einsum('ij,ij->i', d[gsv[tk]], T['t_p3'][tk]) < 0
@@ -268,6 +281,12 @@ def sv_tables(A, T):
     else:
         out['sv_nback'] = np.zeros(0, np.int64)
     return out, H
+
+
+def sv_v0_split(S):
+    """per reco SV: booleans hf_clean (HF class, no V0 daughter track), hf_v0dau (HF class, >= 1), v0_or_secondary, spurious"""
+    sc, nv = S['sv_class'], S['sv_nv0dau']
+    return {'hf_clean': (sc == 0) & (nv == 0), 'hf_v0dau': (sc == 0) & (nv > 0), 'v0_or_secondary': sc == 1, 'spurious': sc == 2}
 
 
 def cascade_flags(H, T, den):
@@ -309,6 +328,10 @@ def sv_metrics(A, T, S, H):
     o['trk_frac'] = {'hf': float((cnt[:, 1] + cnt[:, 2]).sum() / nt), 'primary': float(cnt[:, 0].sum() / nt), 'v0': float(cnt[:, 3].sum() / nt),
                      'other': float(cnt[:, 4].sum() / nt), 'unmatched': float(cnt[:, 5].sum() / nt), 'back': float(S['sv_nback'].sum() / nt)}
     o['tracks_per_sv'] = float(cnt.sum() / max(len(cnt), 1))
+    if 'sv_nv0dau' in S:
+        nev = len(nsv_ev)
+        o['sv_per_1000_events'] = {k: float(1e3 * v.sum() / nev) for k, v in sv_v0_split(S).items()}
+        o['clean_hf_fraction'] = float(np.mean(sv_v0_split(S)['hf_clean'])) if len(sc) else np.nan
     o['mass_ge_5p8'] = float(np.mean(A['sv_mass'] >= 5.8)) if len(A['sv_mass']) else np.nan
     d_, cf = cascade_flags(H, T, den)
     o['cascade'] = {k: float(np.mean(v)) if len(d_) else np.nan for k, v in cf.items()}
@@ -506,6 +529,13 @@ def paired(args):
         items['sv_trkpur_bc'] = trkpur(A) + trkpur(B)
         uds = (T['flav'] == 0).astype(float)
         items['uds_fake_rate'] = (A['ev_nsv'] * uds, uds, B['ev_nsv'] * uds, uds)
+        if 'sv_nv0dau' in SA and 'sv_nv0dau' in SB:           # V0 content of the SVs (inputs with t_v0t)
+            VA, VB = sv_v0_split(SA), sv_v0_split(SB)
+            one = np.ones(nev)
+            for k_ in VA:
+                items['sv_per1000ev_' + k_] = (per_ev(A['sv_ev'], 1e3 * VA[k_]), one, per_ev(B['sv_ev'], 1e3 * VB[k_]), one)
+            items['sv_clean_hf_frac'] = (per_ev(A['sv_ev'], VA['hf_clean']), A['ev_nsv'].astype(float),
+                                         per_ev(B['sv_ev'], VB['hf_clean']), B['ev_nsv'].astype(float))
     o.update(ratio_diffs(items, nev, nboot, rng))
     ca, cb = 1e3 * A['ev_cpu'], 1e3 * B['ev_cpu']
     o['cpu_ms_per_event'] = boot_diff(np.mean, ca, cb, nboot, rng)

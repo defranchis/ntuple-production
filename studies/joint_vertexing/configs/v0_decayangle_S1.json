@@ -1,0 +1,55 @@
+{
+ "bs_sig": [
+  0.02,
+  0.01,
+  2.0
+ ],
+ "prior_s": 2.0,
+ "chi2_cut_neg": 7.0,
+ "temps": [
+  8.0,
+  2.0,
+  1.0
+ ],
+ "sv_forward": 0.8,
+ "sv_min_vdet": 0,
+ "weight_form": "student",
+ "student_nu": 4.0,
+ "chi2_mode_sv": "vcov",
+ "chi2_cut_sv": 16.0,
+ "pv_Tmin": 4.0,
+ "pv_ref": "jetproj_hard",
+ "acc_dis_lo": 0.01,
+ "acc_sigl": 0.3,
+ "acc_cos": 0.5,
+ "acc_fsig2": 3.0,
+ "supply": "vd",
+ "sl_score_seeded": true,
+ "sl_score_min": -1.0,
+ "sl_final_min": 0.55,
+ "vd_n_climb": 4,
+ "split_casc": true,
+ "split_order": 0.98,
+ "split_pick": "valid",
+ "pt_const": "stage1",
+ "v0_class": true,
+ "remove_tight_v0": false,
+ "v0_veto": false,
+ "v0_prior": "S1",
+ "v0_twin_sig": 3.0,
+ "v0_prior_nm": "S1_nomass",
+ "v0_conv": true,
+ "v0_conv_params": "default",
+ "v0_conv_hscale": [
+  1.3364,
+  1.3615
+ ],
+ "v0_hit_table": "default",
+ "v0_qt_min": [
+  0.015,
+  0.015
+ ],
+ "v0_hf": "S1_decayangle",
+ "v0_conv_rmin": 4.5,
+ "v0_twin_ext": 1.5
+}

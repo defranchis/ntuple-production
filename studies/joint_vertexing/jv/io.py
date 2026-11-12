@@ -20,8 +20,10 @@ SAMPLES = {
     'DEV': [f'mc_ZM4212.{i}' for i in range(41, 51)],
     'FAST': ['mc_ZM4212.41:20000'],
     'MID': [f'mc_ZM4212.{i}' for i in range(41, 45)],
-    # training file of a refitted score (last DEV file) and DEV without it
+    # training file of a refitted score and of the V0 tables (last DEV file) and DEV without it
     'TRAIN': ['mc_ZM4212.50'], 'DEV9': [f'mc_ZM4212.{i}' for i in range(41, 50)],
+    # two full DEV files for regression runs against stored DEV outputs
+    'REG2': ['mc_ZM4212.41', 'mc_ZM4212.42'],
     'DATA1': ['data_Y15224.10'],
     # untouched until the final integration (frozen config, evaluated once)
     'HELDOUT': [f'mc_ZM4212.{i}' for i in range(51, 61)],
@@ -50,7 +52,9 @@ class File:
         self.isMC = bool(self.d['isMC'])
         self.nev = len(self.d['ev_run'])
         self.off = {}
-        for key, cnt in (('t', 'ev_ntrk'), ('v', 'ev_nv0'), ('s', 'ev_nsv'), ('st', 'ev_nst'), ('h', 'ev_nhf')):
+        for key, cnt in (('t', 'ev_ntrk'), ('v', 'ev_nv0'), ('s', 'ev_nsv'), ('st', 'ev_nst'), ('h', 'ev_nhf'), ('v0t', 'ev_nv0t')):
+            if key == 'v0t' and cnt not in self.d:       # offsets of the true-V0 table (MC; jv.evaluate_v0)
+                continue
             c = self.d[cnt].astype(np.int64)
             o = np.zeros(len(c) + 1, np.int64)
             np.cumsum(c, out=o[1:])

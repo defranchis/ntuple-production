@@ -11,6 +11,15 @@ Output : $JV_RUNS/<out_tag>/<sample>/<algo>/<stem>_<a>_<b>.npz
   ev_pv (3), ev_pvc6 (xx yy zz yx zx zy), ev_nsv, ev_cpu (s, process time), ev_row; sv_ev (local event index in the unit),
   sv_pos, sv_c6, sv_mass, sv_ntrk; t_wpv, t_assign (-1 none, 0 PV, k>=1 SV k), t_wass, t_s3 (per baseline track, input
   order of the unit's events)
+  V0 class on (config v0_class, jv/v0.py), in addition, per V0 with weight > v0_out_min: v0_ev (local event index),
+  v0_t1, v0_t2 (event-local track indices: positive, negative track), v0_pdg (310 K0S, 3122 Lambda or anti-Lambda, 22
+  conversion), v0_hyp (1 K0S, 2 Lambda, 3 anti-Lambda, 4 conversion), v0_pos, v0_c6, v0_mass (GeV, booked hypothesis;
+  conversions: m_ee at the tangent point), v0_w (final V0 weight, not calibrated as a probability), v0_p (GeV), v0_w0
+  (weight without the mass term, only with config v0_prior_nm); per track t_v0 (index of the track's V0 in its event
+  when the V0 weight > hard_min, -1 none). Per track: t_assign 0 PV / k SV / -1 with t_v0 >= 0 = V0 / -1 otherwise =
+  none. With config v0_pt_point also v0_org (most probable origin of the V0: 0 PV, k = SV k of the last S4 pass, -1
+  none), v0_orgw (its posterior) and per SV sv_ptw (summed V0 weight times origin posterior on that SV; 0 for SVs added
+  by the cascade split).
 """
 import json
 import os
@@ -42,6 +51,15 @@ def unit(args):
         for name, cfg in algos:
             o = {k: [] for k in ('ev_pv', 'ev_pvc6', 'ev_nsv', 'ev_cpu', 'ev_row', 'sv_ev', 'sv_pos', 'sv_c6', 'sv_mass',
                                  'sv_ntrk', 't_wpv', 't_assign', 't_wass', 't_s3')}
+            v0on = bool(cfg and cfg.get('v0_class'))
+            if v0on:
+                o.update({k: [] for k in ('v0_ev', 'v0_t1', 'v0_t2', 'v0_pdg', 'v0_hyp', 'v0_pos', 'v0_c6', 'v0_mass', 'v0_w',
+                                          'v0_p', 't_v0')})
+                if cfg.get('v0_prior_nm') is not None:
+                    o['v0_w0'] = []          # V0 weight without the mass term
+            ptout = bool(v0on and cfg.get('v0_pt_point'))
+            if ptout:
+                o.update(v0_org=[], v0_orgw=[], sv_ptw=[])
             for e in range(a, b):
                 E = f.event(e)
                 try:
@@ -56,15 +74,28 @@ def unit(args):
                     o['sv_ntrk'].append(nt)
                 o['t_wpv'].append(r['wpv']); o['t_assign'].append(r['assign']); o['t_wass'].append(r['wass'])
                 o['t_s3'].append(r['s3'])
+                if v0on:
+                    for (t1, t2, pdg, hyp, x, C, m, w, pp, w0) in r['v0s']:
+                        o['v0_ev'].append(e - a); o['v0_t1'].append(t1); o['v0_t2'].append(t2); o['v0_pdg'].append(pdg)
+                        o['v0_hyp'].append(hyp); o['v0_pos'].append(x); o['v0_c6'].append(_c6(C)); o['v0_mass'].append(m)
+                        o['v0_w'].append(w); o['v0_p'].append(pp)
+                        if 'v0_w0' in o:
+                            o['v0_w0'].append(w0)
+                    o['t_v0'].append(r['tv0'])
+                    if ptout:
+                        og, ow, pw = r['v0org']
+                        o['v0_org'] += list(og); o['v0_orgw'] += list(ow); o['sv_ptw'] += list(pw)
             arr = {}
             for k, v in o.items():
                 if k.startswith('t_'):
                     arr[k] = np.concatenate(v) if v else np.zeros(0)
-                elif k in ('sv_pos', 'sv_c6'):
-                    arr[k] = np.asarray(v, np.float64).reshape(-1, 3 if k == 'sv_pos' else 6)
+                elif k in ('sv_pos', 'sv_c6', 'v0_pos', 'v0_c6'):
+                    arr[k] = np.asarray(v, np.float64).reshape(-1, 3 if k.endswith('_pos') else 6)
                 else:
                     arr[k] = np.asarray(v)
             arr['t_assign'] = arr['t_assign'].astype(np.int16)
+            if v0on:
+                arr['t_v0'] = arr['t_v0'].astype(np.int16)
             for k in ('t_wpv', 't_wass', 't_s3'):
                 arr[k] = arr[k].astype(np.float32)
             d = f'{IO.env_path("JV_RUNS")}/{tag}/{sample}/{name}'
@@ -83,7 +114,10 @@ def parse_algos(names):
     for nm in names:
         if '=' in nm:
             k, p = nm.split('=', 1)
-            out.append((k, HY.config(json.load(open(p)))))
+            c = HY.config(json.load(open(p)))
+            if k.startswith('oracle') and c['v0_class']:
+                raise ValueError(f'{nm}: the oracle PV has no V0 class')
+            out.append((k, c))
         elif nm in ('oracle', 'oracle_noprune'):
             out.append((nm, None))
         else:
