@@ -1,14 +1,15 @@
 #ifndef ALEPH_RECO_CONFIG_H
 #define ALEPH_RECO_CONFIG_H
 // Primary-vertex reconstruction constants shared by stage1.py, the standalone
-// fitter (analyzer_pvnew.h) and the standalone examples. Dependency-free;
-// lengths in cm unless the name says otherwise (solenoid field and track
-// conventions: aleph_units.h).
+// fitter (analyzer_pvnew.h), the joint vertex fitter (jointvtx_tables.h) and
+// the standalone examples. Dependency-free; lengths in cm unless the name says
+// otherwise (solenoid field and track conventions: aleph_units.h).
 namespace FCCAnalyses {
 namespace AlephReco {
 // impact-parameter preselection of the primary-vertex candidate tracks
 constexpr double kPVTrackD0Max = 0.75;   // |d0| [cm]
 constexpr double kPVTrackZ0Max = 2.0;    // |z0| [cm]
+constexpr double kPVTrackZ0MaxBeamspot = 5.0;  // |z0| [cm] from the run beam spot
 
 // beam-spot constraint of the primary-vertex fit: loose widths from data
 constexpr double kBeamSigmaX_um = 200.;

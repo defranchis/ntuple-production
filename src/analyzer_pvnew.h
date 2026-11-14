@@ -45,7 +45,7 @@ constexpr double PVN_CHI2_MAX = AlephReco::kPVChi2Max;
 // track pre-selection window on the impact parameters, cm; the z window is
 // wider than the legacy chain's kPVTrackZ0Max
 constexpr double PVN_D0_MAX = AlephReco::kPVTrackD0Max;
-constexpr double PVN_Z0_MAX = 5.0;
+constexpr double PVN_Z0_MAX = AlephReco::kPVTrackZ0MaxBeamspot;
 
 // beam-spot constraint widths, physical cm
 constexpr double PVN_BS_SIGMA_X = AlephReco::kBeamSigmaX_um / 1e4;

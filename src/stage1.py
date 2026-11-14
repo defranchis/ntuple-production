@@ -196,6 +196,46 @@ ALEPH_YV0_BRANCHES = ("n_yv0_event",) + tuple(f"yv0_{_b}" for _b, _ in YV0_MEMBE
 RUNINFO_MEMBERS = (("EVT_Ebeam", "beamEnergy"), ("EVT_Bz", "bz"))
 ALEPH_EVENT_BRANCHES = tuple(_b for _b, _ in BEAMSPOT_MEMBERS) + tuple(_b for _b, _ in RUNINFO_MEMBERS)
 
+# joint PV + SV vertexer with V0s (analyzer_jointvtx.h): (branch, expression on jv_result / jv_event); the per-SV
+# derived quantities use the svn getters on the converted vertices jv_svfcc / jv_pvfcc
+JV = "FCCAnalyses::AlephJointVtx"
+JV_COV = ("xx", "yx", "yy", "zx", "zy", "zz")
+JV_DEFINES = (
+    (("jv_status", f"{JV}::eventStatus(jv_result)"),)    # 0 = ok, else the failed step (ResultStatus, jointvtx_event.h)
+    + tuple((f"jvpv_{_a}", f"{JV}::pvComp(jv_result, {_i})") for _i, _a in enumerate("xyz"))
+    + tuple((f"jvpv_cov_{_c}", f"{JV}::pvCov(jv_result, {_k})") for _k, _c in enumerate(JV_COV))
+    + (("n_jvsv_event", f"{JV}::nSV(jv_result)"),)
+    + tuple((f"jvsv_v{_a}", f"{JV}::svPos(jv_result, {_i})") for _i, _a in enumerate("xyz"))
+    + tuple((f"jvsv_cov_{_c}", f"{JV}::svCov(jv_result, {_k})") for _k, _c in enumerate(JV_COV))
+    + (("jvsv_mass",        f"{JV}::svMass(jv_result)"),
+       ("jvsv_ntracks",     f"{JV}::svNtracks(jv_result)"),
+       ("jvsv_dxyz",        "FCCAnalyses::AlephTruth::candDxyz(jv_svfcc, jv_pvfcc)"),
+       ("jvsv_p",           "FCCAnalyses::AlephTruth::candP(jv_svfcc)"),
+       ("jvsv_cosPointing", "FCCAnalyses::AlephTruth::candCosPointing(jv_svfcc, jv_pvfcc)"),
+       ("jvsv_pointSig",    "FCCAnalyses::AlephV0New::candPointSig(jv_svfcc, jv_pvfcc)"),
+       ("jvsv_sigL",        "FCCAnalyses::AlephSVNew::candSigL(jv_svfcc)"),
+       # per constituent track, flat over the SVs:
+       ("jvsv_trk_sv",      f"{JV}::svTrkSV(jv_result)"),
+       ("jvsv_trk_origIdx", f"{JV}::svTrkOrigIdx(jv_result, jv_event)"),
+       ("n_jvv0_event",     f"{JV}::nV0(jv_result)"),
+       ("jvv0_trkPos_origIdx", f"{JV}::v0TrkOrigIdx(jv_result, jv_event, 0)"),
+       ("jvv0_trkNeg_origIdx", f"{JV}::v0TrkOrigIdx(jv_result, jv_event, 1)"),
+       ("jvv0_pdg",         f"{JV}::v0Pdg(jv_result)"),
+       ("jvv0_hyp",         f"{JV}::v0Hyp(jv_result)"))
+    + tuple((f"jvv0_v{_a}", f"{JV}::v0Pos(jv_result, {_i})") for _i, _a in enumerate("xyz"))
+    + tuple((f"jvv0_cov_{_c}", f"{JV}::v0Cov(jv_result, {_k})") for _k, _c in enumerate(JV_COV))
+    + (("jvv0_invM",        f"{JV}::v0Mass(jv_result)"),
+       ("jvv0_w",           f"{JV}::v0Weight(jv_result)"),
+       ("jvv0_p",           f"{JV}::v0P(jv_result)"))
+    + tuple((f"jvv0_p{_a}", f"{JV}::v0Pcomp(jv_result, {_i})") for _i, _a in enumerate("xyz"))
+    # per track over Tracks:
+    + (("trk_jvAssign",     f"{JV}::trkAssign(jv_result, jv_event)"),
+       ("trk_jvV0",         f"{JV}::trkV0(jv_result, jv_event)"),
+       ("trk_jvWeight",     f"{JV}::trkWeight(jv_result, jv_event)"),
+       ("trk_jvWeightPV",   f"{JV}::trkWeightPV(jv_result, jv_event)"),
+       ("trk_jvIPSig",      f"{JV}::trkIPSig(jv_result, jv_event)"))
+)
+
 
 def _cand_member(block, branch):
     """Member path of a D0/D* candidate branch inside DstarCands."""
@@ -244,6 +284,8 @@ class Analysis():
                             help='Skip the phi(1020)->K+K- finder (no phikk_* branches).')
         parser.add_argument('--noDstar', action='store_true',
                             help='Skip the D*+ -> D0(K pi) pi_slow finder (no dstar_* branches).')
+        parser.add_argument('--noJointVtx', action='store_true',
+                            help='Skip the joint PV + SV vertexer with V0s (no jv*, n_jv*_event and trk_jv* branches).')
         parser.add_argument('--noDedxGate', action='store_true',
                             help='accept every linked dE/dx measurement as valid, i.e. switch off the failed-leg omega sentinel gate; for converters that no longer copy omega into a failed leg.')
         parser.add_argument('--oldTrackSel', action='store_true',
@@ -270,6 +312,7 @@ class Analysis():
         self.do_svnew = not self.ana_args.oldSV
         self.do_phikk = not self.ana_args.noPhiKK
         self.do_dstar = not self.ana_args.noDstar
+        self.do_jointvtx = not self.ana_args.noJointVtx
 
         self.do_pvnew = not self.ana_args.oldPV
 
@@ -394,6 +437,9 @@ class Analysis():
             self.include_paths.append("analyzer_phikk.h")
         if self.do_dstar:
             self.include_paths.append("analyzer_dstar.h")
+        # the adapter first, then the vertexer (runEvent, nominalSettings)
+        if self.do_jointvtx:
+            self.include_paths += ["analyzer_jointvtx.h", "jointvtx_algo.h"]
 
         # dE/dx validity gate, shared by the pfcand block and the candidate legs
         self.dedx_gate = "false" if self.ana_args.noDedxGate else "true"
@@ -1182,6 +1228,23 @@ class Analysis():
         df = df.Define("EVT_Evis",          "Sum(AnalysisParticles_e)")  # total visible energy: sum over the analysis particles [GeV]
         
 
+        ############################################# Joint PV + SV vertexer with V0s ##########################################
+        # every event, independent of pv_good: it fits its own PV; the existing V0 finder's candidates feed its option
+        # to drop tight-V0 daughters (empty under --oldV0)
+        if self.do_jointvtx:
+            _v0n = ("v0n_trk1_origIdx, v0n_trk2_origIdx, v0n_tight" if self.do_v0new
+                    else "ROOT::VecOps::RVec<int>{}, ROOT::VecOps::RVec<int>{}, ROOT::VecOps::RVec<int>{}")
+            df = df.Define("jv_event", f"{JV}::buildEvent(trackstates_selected_baseline, "
+                           "trackstates_selected_baseline_flipped, tracks_selected_baseline, "
+                           "_Tracks_subdetectorHitNumbers, selBaselineOrigIdx, int(Tracks.size()), pfcand_trackIdx, "
+                           "jet_theta, jet_phi, jet_p, Beamspot_x_cm, Beamspot_y_cm, Beamspot_z_cm, "
+                           f"EVT_Thrust_X, EVT_Thrust_Y, EVT_Thrust_Z, {_v0n})")
+            df = df.Define("jv_result", f"{JV}::runEvent(jv_event, {JV}::nominalSettings({JV}::JV_BS_SETTING))")
+            df = df.Define("jv_pvfcc", f"{JV}::pvAsFCC(jv_result)")
+            df = df.Define("jv_svfcc", f"{JV}::svsAsFCC(jv_result)")
+            for _b, _e in JV_DEFINES:
+                df = df.Define(_b, _e)
+
         return df
 
     def output(self):
@@ -1225,6 +1288,8 @@ class Analysis():
                 for b in DSTAR_TRK_BRANCHES
                 + tuple(b for b, _ in DEDX_LEG_DEFINES + LEG_PID_DEFINES)
             ]
+        if self.do_jointvtx:
+            module_branches += [b for b, _ in JV_DEFINES]
 
         pv_branches = ["pv_converged", "pv_split_converged", "pv_trivial",
                        "pv_good"] if self.do_pvnew else []
