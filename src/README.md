@@ -51,7 +51,7 @@ Only the data runs selected in `data/lumi/run_list_<year>.csv` are kept, before 
 
 `--noDedxGate` (data and MC) accepts every linked dE/dx measurement as valid, i.e. switches off the failed-leg omega sentinel gate. Use it with converters that no longer copy the track omega into a failed leg.
 
-The baseline track selection shared by the primary vertex fit, the V0 finder, the secondary vertex finders and the φ→K⁺K⁻ and D* finders (whose pairing pool is the baseline list minus the tight `v0n` daughters), and recorded in `trk_member` bit 9, requires `chi2/ndf <= 10`, finite track-state parameters, a finite positive-definite perigee covariance (5x5 block, Cholesky test), at least `kTrackMinTPCHits` (4) TPC hits and `|z0| <= kTrackMaxAbsZ0` (50 cm, perigee to the origin); `--oldTrackSel` (data and MC) drops the TPC-hit and `|z0|` requirements, for all of them. In simulation it roughly triples the D* candidates and the running time.
+The baseline track selection shared by the primary vertex fit, the V0 finder, the secondary vertex finders, the joint vertexer and the φ→K⁺K⁻ and D* finders (whose pairing pool is the baseline list minus the tight `v0n` daughters), and recorded in `trk_member` bit 9, requires `chi2/ndf <= 10`, finite track-state parameters, a finite positive-definite perigee covariance (5x5 block, Cholesky test), at least `kTrackMinTPCHits` (4) TPC hits and `|z0| <= kTrackMaxAbsZ0` (50 cm, perigee to the origin); `--oldTrackSel` (data and MC) drops the TPC-hit and `|z0|` requirements, for all of them. In simulation it roughly triples the D* candidates and the running time.
 
 `pfcand_d0` and `pfcand_z0` are the **raw** perigee impact parameters of the track linked to each jet constituent, taken from the stored track state: referenced to the coordinate origin, in cm, in the LCIO sign convention (the ALEPH→LCIO flip of `D0` and `omega` is applied; the `pfcand_*` covariance branches are read from the same flipped collection). They are *not* recomputed at the primary vertex — `pfcand_dxy` and `pfcand_dz` are the PV-referenced ones. A constituent with no track (a neutral) carries the guard value −9 in both, again as for the covariance branches; the PV-referenced `pfcand_dxy/dz/phi0/C/ct` also read −9 for a charge-0 constituent that carries a track link.
 
@@ -63,7 +63,7 @@ The −9 sentinel of `pfcand_d0`/`pfcand_z0` lies inside the physical range of t
 
 ### Reconstruction modules: defaults and opt-outs
 
-A flag-less `stage1.py` runs the two-tier V0 module ([`analyzer_v0new.h`](analyzer_v0new.h)), the secondary-vertex module ([`analyzer_svnew.h`](analyzer_svnew.h)), the φ→K⁺K⁻ finder ([`analyzer_phikk.h`](analyzer_phikk.h)) and the D*→D⁰π finder ([`analyzer_dstar.h`](analyzer_dstar.h)) on top of the standard chain, writing the `v0n_*`, `svn_*`, `phikk_*` and `dstar_*` branches. None of them writes generator-level information, so the output schema is the same on MC and on data.
+A flag-less `stage1.py` runs the two-tier V0 module ([`analyzer_v0new.h`](analyzer_v0new.h)), the secondary-vertex module ([`analyzer_svnew.h`](analyzer_svnew.h)), the joint vertexer ([`analyzer_jointvtx.h`](analyzer_jointvtx.h)), the φ→K⁺K⁻ finder ([`analyzer_phikk.h`](analyzer_phikk.h)) and the D*→D⁰π finder ([`analyzer_dstar.h`](analyzer_dstar.h)) on top of the standard chain, writing the `v0n_*`, `svn_*`, `jv*`, `phikk_*` and `dstar_*` branches. None of them writes generator-level information, so the output schema is the same on MC and on data.
 
 The legacy code paths remain available as opt-outs:
 
@@ -74,8 +74,9 @@ The legacy code paths remain available as opt-outs:
 | `--noV0TagVars` | drop the jet-relative tagger inputs of the module (the `v0n_jetIdx`/`z`/`zL`/... block and the per-daughter `q`/`p`/`nTPC` branches). The rest of the module is unaffected; `--oldV0` drops them too. |
 | `--noPhiKK` | skip the φ→K⁺K⁻ finder: no `phikk_*` branches and no `n_phikk_event`. The φ bits of `trk_member` then stay 0. |
 | `--noDstar` | skip the D*→D⁰π finder: no `dstar_*` branches and no `n_dstar_event`/`n_d0fits_event`. The D⁰/D* bits of `trk_member` then stay 0. |
+| `--noJointVtx` | skip the joint vertexer: no `jv*`, `n_jv*_event` and `trk_jv*` branches. No other branch depends on it. |
 
-The selection itself is not configurable from the command line: every tuned value is a named constant in the header that uses it, declared once. The paragraphs below describe it in words.
+The selection itself is not configurable from the command line: every tuned value is a named constant in the header that uses it, declared once (for the joint vertexer see its section). The paragraphs below describe it in words.
 
 ### The two-tier V0 module
 
@@ -191,7 +192,7 @@ The primary vertex is reconstructed by a standalone fitter, [`analyzer_pvnew.h`]
 
 Tracks enter the fit through a pre-selection window on the impact parameters, `|D0| <= 0.75 cm` and `|Z0| <= 5 cm` (`PVN_D0_MAX`, `PVN_Z0_MAX`), referenced to the run beamspot. Track/vertex compatibility is then judged at `chi2max = 5` (`PVN_CHI2_MAX`); lowering it claims fewer tracks as primary and so leaves more to the secondary finders. Both fits — the selection fit that prunes the track list and the final position fit — share one beamspot constraint, of Gaussian widths 200 µm in x, 100 µm in y and 2 cm along the beam (`PVN_BS_SIGMA_X/Y/Z`, declared in cm). Every tuned value is a named `constexpr` in that header, where the values shared with the legacy chain (the d0 window, the widths and the chi2 cut) and the z window are defined from [`aleph_reco_config.h`](aleph_reco_config.h); none is configurable from the command line.
 
-Four `int` quality flags are written: `pv_converged` (the position fit converged), `pv_split_converged` (every pruning pass converged, not only the final fit), `pv_trivial` (fewer than two pre-selected tracks entered the fit, so the vertex carries no event information even when both fits converge) and `pv_good`, the single predicate that downstream users should test. It is `pv_converged && pv_split_converged && !pv_trivial`, and in addition 0 when the fit ended with two tracks of which one still has χ² ≥ `chi2max` to the vertex (the pruning stops at two tracks); that last condition has no flag of its own, so `pv_good` cannot be recomputed from the other three. On a fit that did not converge the covariance is written as zeros while the position is still written — a nonsensical position is itself the diagnostic, and `pv_good`, not the values, is the contract. Consumers are guarded on `pv_good`: the PV-referenced jet-constituent variables fall back to the beamspot position, and the secondary-vertex, V0, φ→K⁺K⁻ and D* collections are empty, for an event without a good PV.
+Four `int` quality flags are written: `pv_converged` (the position fit converged), `pv_split_converged` (every pruning pass converged, not only the final fit), `pv_trivial` (fewer than two pre-selected tracks entered the fit, so the vertex carries no event information even when both fits converge) and `pv_good`, the single predicate that downstream users should test. It is `pv_converged && pv_split_converged && !pv_trivial`, and in addition 0 when the fit ended with two tracks of which one still has χ² ≥ `chi2max` to the vertex (the pruning stops at two tracks); that last condition has no flag of its own, so `pv_good` cannot be recomputed from the other three. On a fit that did not converge the covariance is written as zeros while the position is still written — a nonsensical position is itself the diagnostic, and `pv_good`, not the values, is the contract. Consumers are guarded on `pv_good`: the PV-referenced jet-constituent variables fall back to the beamspot position, and the secondary-vertex, V0, φ→K⁺K⁻ and D* collections are empty, for an event without a good PV. The joint vertexer does not use this vertex and is not guarded.
 
 The PV fit covariance `Vertex_refit_cov_xx`, `_yx`, `_yy`, `_zx`, `_zy`, `_zz` (lower-triangular, cm²) and the fit quality `Vertex_refit_chi2` (χ²/ndf) are written by both chains. With the default fitter the χ² includes the beamspot-constraint term while ndf = 2N − 3 for N fitted tracks does not count its three degrees of freedom, so χ²/ndf averages about 2N/(2N − 3) rather than 1 (4 for N = 2, 1.2 for N = 10). A trivial vertex (`pv_trivial`) has ndf ≤ 0 and `Vertex_refit_chi2 == −1`; it is a fit of the beamspot constraint with at most one track, and when that fit converges its position and non-zero covariance are written as for any other vertex, so test `pv_trivial` or `pv_good` rather than the covariance. Under `--oldPV` a zero covariance together with `Vertex_refit_chi2 == 0` means that no vertex was fitted because the legacy chain kept fewer than two primary tracks (`n_primary_tracks < 2`): either fewer than two tracks passed the pre-selection, or `get_PrimaryTracks` pruned them to one. Its first pass always drops the worst track, so two pre-selected tracks end this way unless that fit fails. A single kept track still counts in `n_primary_tracks` and carries `trk_member` bit 0.
 
@@ -259,6 +260,64 @@ Per constituent track, flat over the candidates in the same order:
 | `svn_trk_idx` | index of the track in the secondary-track collection the finder ran on | — |
 
 **V0 pointing at the secondary vertices.** With both modules on, every V0 candidate also carries its pointing at the nearest `svn` vertex, the one with the largest cosine between the candidate momentum and the vertex→candidate line; vertices sharing a track with the candidate are skipped. Per candidate, in the order of `v0n_pdg`: `v0n_svnCosPoint` (that cosine; −2 when there is no such vertex), `v0n_svnPointSig` (the transverse pointing significance with respect to that vertex, defined as `v0n_pointSig` with the vertex in place of the primary vertex; −1 when there is no such vertex or the covariance is singular) and `v0n_svnIdx` (its index in the `svn_*` arrays; −1 when there is none, the reliable "no vertex" test). They are dropped with either module.
+
+### The joint vertexer
+
+The joint vertexer, [`analyzer_jointvtx.h`](analyzer_jointvtx.h) with the algorithm in the `jointvtx_*.h` headers, runs by default and writes the `jv*` branches; `--noJointVtx` drops them. It fits the primary vertex (PV), the secondary vertices (SVs) and the V0s of an event together, the V0s being Kₛ→π⁺π⁻, Λ→pπ⁻, Λ̄→p̄π⁺ and photon conversions γ→e⁺e⁻. Every track in the fit is shared with soft weights among the PV, the SVs, the V0 candidates and an outlier term, and the weights are recomputed while the fit is annealed from a high to a low temperature (the weights sharpen as the temperature falls); the SVs start from the maxima of the vertex density of the tracks and, in a second pass, from pairs of tracks left unassigned, or assigned to the PV but displaced from it, and an SV that fits better as a b → c decay cascade is split in two. At the end a track is assigned to the PV or SV of largest weight if that weight exceeds 0.5 (`JV_HARD_MIN`), and a V0 whose weight exceeds 0.5 holds its two tracks.
+
+It runs on the baseline tracks, with the run beamspot (`Beamspot_*_cm`) as a constraint, and signs the impact parameters along the two jets (along the thrust axis if a jet axis is not finite). It fits its own PV in every event, independent of `pv_good`, and takes no vertex from the other modules. Nothing is configurable from the command line: the PV pre-selection window, the χ² cut of the PV tracks and the beamspot widths are those of the primary-vertex fit above, defined from [`aleph_reco_config.h`](aleph_reco_config.h); the other tuned values, and the tables and coefficients fitted on simulated Z decays, are named constants of [`jointvtx_tables.h`](jointvtx_tables.h), a file generated from the configuration of the reference implementation (not edited by hand), except the selection of conversion pairs ([`jointvtx_conv.h`](jointvtx_conv.h)) and a few thresholds of the fit, which are written where they are used.
+
+A fit or matrix inversion that fails (singular or non-finite linear algebra) ends the event: `jv_status` names the step, the PV reads NaN, there are no SVs and no V0s, and every per-track branch reads its fill value. Apart from the NaN PV such an event looks like one without vertices, so select `jv_status == 0`. The values, from `ResultStatus` in [`jointvtx_event.h`](jointvtx_event.h): 0 fitted; 2 reference PV (the starting estimate of the PV); 3 impact-parameter significances at the reference PV; 4 SV candidates; 5 V0 candidates; 6 first joint fit; 7 second pass, including its joint fit; 8 cascade split; 9 significances at the final PV (1, not run, is never written).
+
+**Output branches.** Per event:
+
+| branch | definition | unit | undefined |
+| --- | --- | --- | --- |
+| `jv_status` | 0 = fitted, otherwise the failed step (see above) | — | — |
+| `jvpv_x/y/z` | PV position | cm | NaN (`jv_status` ≠ 0) |
+| `jvpv_cov_{xx,yx,yy,zx,zy,zz}` | PV position covariance, packed lower triangle | cm² | NaN (`jv_status` ≠ 0) |
+| `n_jvsv_event`, `n_jvv0_event` | number of SVs, of V0s | — | — |
+
+Per SV, in fit order (`n_jvsv_event` entries). Position and covariance come from the weighted fit, mass and momentum from the tracks assigned to the SV, with their momenta at the vertex:
+
+| branch | definition | unit | undefined |
+| --- | --- | --- | --- |
+| `jvsv_vx/vy/vz` | fitted vertex position | cm | — |
+| `jvsv_cov_{xx,yx,yy,zx,zy,zz}` | vertex position covariance, packed lower triangle | cm² | — |
+| `jvsv_ntracks` | number of tracks assigned to the SV | — | — |
+| `jvsv_mass` | invariant mass of the assigned tracks, pion hypothesis | GeV | 0 (no assigned track) |
+| `jvsv_p` | magnitude of their summed momentum | GeV | 0 (no assigned track) |
+| `jvsv_dxyz` | 3D distance from the PV `jvpv_*` | cm | −1 (fewer than 2 tracks assigned to the PV) |
+| `jvsv_cosPointing` | cosine between the flight direction from the PV and the summed momentum | — | −2 (zero flight length or momentum) |
+| `jvsv_pointSig` | transverse pointing significance with respect to the PV, defined as `v0n_pointSig` | — | −1 (degenerate geometry or singular covariance) |
+| `jvsv_sigL` | vertex position uncertainty along the summed momentum | cm | −1 (zero momentum) |
+
+Per assigned track, flat over the SVs in the same order: `jvsv_trk_sv` (index of the SV) and `jvsv_trk_origIdx` (index of the track in the `Tracks` collection).
+
+Per V0 of weight above 0.05 (`JV_V0_OUT_MIN`), in candidate order (`n_jvv0_event` entries):
+
+| branch | definition | unit | undefined |
+| --- | --- | --- | --- |
+| `jvv0_hyp` | hypothesis: 1 Kₛ, 2 Λ, 3 Λ̄, 4 conversion (`V0Hyp` in [`jointvtx_common.h`](jointvtx_common.h)) | — | — |
+| `jvv0_pdg` | \|PDG\| code of the hypothesis: 310, 3122 (Λ or Λ̄) or 22 | — | — |
+| `jvv0_w` | weight of the V0 at the end of the fit | — | — |
+| `jvv0_trkPos_origIdx`, `jvv0_trkNeg_origIdx` | `Tracks` index of the positive and of the negative daughter | — | — |
+| `jvv0_vx/vy/vz` | vertex of the two-track fit; conversions: of the conversion fit, which gives the two tracks a common direction at the vertex | cm | — |
+| `jvv0_cov_{xx,yx,yy,zx,zy,zz}` | its position covariance, packed lower triangle | cm² | — |
+| `jvv0_invM` | invariant mass under the hypothesis, from the daughter momenta at the vertex; conversions: e⁺e⁻ mass at the tangent point of the two track circles | GeV | — |
+| `jvv0_p`, `jvv0_px/py/pz` | momentum of the pair at the vertex | GeV | — |
+
+A track can be a daughter of several written V0s (other hypotheses of the same pair, or pairs sharing a track).
+
+Per track, arrays over the whole `Tracks` collection like `trk_member`. A track outside the baseline selection reads −1 in the integer branches and −999 in the float branches, as does every track of an event with `jv_status` ≠ 0; a baseline track that did not enter the fit reads −1 in `trk_jvAssign` and `trk_jvV0` and 0 in the two weights.
+
+| branch | definition | unit | undefined |
+| --- | --- | --- | --- |
+| `trk_jvAssign` | vertex of the track: 0 the PV, k ≥ 1 the SV k − 1 of the `jvsv_*` arrays, −1 none (no weight above 0.5, a track held by a V0, or not in the fit) | — | −1 |
+| `trk_jvV0` | index in the `jvv0_*` arrays of the V0 holding the track (V0 weight above 0.5); such a track has `trk_jvAssign` = −1 | — | −1 |
+| `trk_jvWeight` | largest final weight of the track over the PV and the SVs | — | −999 |
+| `trk_jvWeightPV` | weight of the track in the last refit of the PV position, made at a higher temperature than the final weights (0 at or below 10⁻⁴) | — | −999 |
+| `trk_jvIPSig` | 3D impact-parameter significance at the PV `jvpv_*` (track and PV covariances), positive when the impact-parameter vector points along the axis of the track's jet (for a track in no jet: the jet axis closest to its momentum) | — | −999 |
 
 ### The φ→K⁺K⁻ finder
 
